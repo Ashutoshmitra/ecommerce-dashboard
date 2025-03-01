@@ -7,22 +7,61 @@ from script_runner import run_ecommerce_analysis, schedule_daily_update
 import threading
 import requests
 import time
+import logging
+import anthropic  # Import the Anthropic SDK
+from dotenv import load_dotenv
+load_dotenv()
 
-app = Flask(__name__, static_folder='../frontend/build')
-CORS(app, resources={r"/*": {"origins": "*", "allow_headers": "*", "expose_headers": "*"}})
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
 
-# Also, add a general error handler to ensure CORS headers are added even when errors occur:
+# Initialize Flask app
+app = Flask(__name__, static_folder='frontend/build' if os.path.exists('frontend/build') else 'frontend/public')
+
+# Configure CORS
+CORS(app, resources={r"/*": {
+    "origins": "*", 
+    "allow_headers": ["Content-Type", "Authorization", "X-API-Key", "Accept", "anthropic-version"], 
+    "expose_headers": ["Content-Type", "Authorization"],
+    "methods": ["GET", "POST", "OPTIONS"]
+}})
+
+# Get Anthropic API key from environment variables
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', "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")
+
+# Initialize Anthropic client
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+CLAUDE_MODEL = "claude-3-7-sonnet-20250219"  # Latest model as of March 2025
+
+# Debug endpoint to test headers
+@app.route('/api/test-headers', methods=['GET'])
+def test_headers():
+    return jsonify({"headers": dict(request.headers)})
+
+# Log request info for debugging
+@app.before_request
+def log_request_info():
+    app.logger.debug('Headers: %s', dict(request.headers))
+    app.logger.debug('Path: %s', request.path)
+
+# Global error handler
 @app.errorhandler(Exception)
 def handle_error(e):
-    # Add CORS headers to error responses
+    app.logger.error(f"Error: {str(e)}")
     response = jsonify({"error": str(e)})
     response.status_code = 500
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, Accept, anthropic-version')
+    response.headers.add('Content-Type', 'application/json')
     return response
 
-# Store your Anthropic API key here
-ANTHROPIC_API_KEY = "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"
+@app.route('/api/list-files', methods=['GET'])
+def list_files():
+    try:
+        files = os.listdir('.')
+        return jsonify({"files": files})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Endpoint to run the analysis script
 @app.route('/api/run-script', methods=['POST'])
@@ -37,7 +76,7 @@ def run_script():
         )
         return jsonify(result)
     except Exception as e:
-        print(f"Error running script: {str(e)}")
+        app.logger.error(f"Error running script: {str(e)}")
         return jsonify({
             "status": "error",
             "message": f"Error running script: {str(e)}"
@@ -47,14 +86,15 @@ def run_script():
 @app.route('/api/anthropic-key', methods=['GET'])
 def get_anthropic_key():
     # Add validation to prevent exposing a placeholder key
-    if ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "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":
         return jsonify({
             "error": "API key not configured",
-            "message": "Please set a valid Anthropic API key in server.py"
+            "message": "Please set a valid Anthropic API key as an environment variable"
         }), 403
     
     return jsonify({"apiKey": ANTHROPIC_API_KEY})
 
+# Chat endpoint using the Anthropic SDK
 @app.route('/api/chat', methods=['POST'])
 def chat_proxy():
     try:
@@ -65,7 +105,7 @@ def chat_proxy():
         if not question:
             return jsonify({"error": "Question is required"}), 400
         
-        # Create a more specific system prompt
+        # Create a specific system prompt for analytics
         system_prompt = """You are an expert e-commerce marketing analytics assistant. You have full access to the campaign data provided.
 
 When answering questions about specific campaigns, products, or metrics:
@@ -79,44 +119,36 @@ If you can't find a specific campaign in the data, clearly state that it wasn't 
 
 Provide concise, data-driven insights and clear recommendations. Be specific and reference metrics from the provided data."""
         
-        # Make the request to Anthropic API
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                'Content-Type': 'application/json',
-                'X-API-Key': ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-            },
-            json={
-                'model': 'claude-3-7-sonnet-20250219',
-                'max_tokens': 1000,
-                'system': system_prompt,
-                'messages': [
-                    {
-                        'role': 'user',
-                        'content': f"Here is the e-commerce dashboard data with complete campaign information:\n\n{json.dumps(dashboard_data, indent=2)}\n\nMy question is: {question}\n\nPlease answer based on the actual campaign data in the allCampaigns section, not just the summary metrics."
-                    }
-                ]
-            }
+        # Create the user message with dashboard data
+        user_message = f"Here is the e-commerce dashboard data with complete campaign information:\n\n{json.dumps(dashboard_data, indent=2)}\n\nMy question is: {question}\n\nPlease answer based on the actual campaign data in the allCampaigns section, not just the summary metrics."
+        
+        # Use the Anthropic SDK to create the message
+        response = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1000,
+            temperature=0,  # Lower temperature for more precise analytics
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_message
+                        }
+                    ]
+                }
+            ]
         )
         
-        if response.status_code != 200:
-            return jsonify({
-                "error": f"Anthropic API error: {response.status_code}",
-                "insight": f"Error generating AI response: {response.text}. Please try again later.",
-                "model": "Error",
-                "id": f"error-{int(time.time())}"
-            }), 500
-        
-        result = response.json()
-        
+        # Extract and return the response
         return jsonify({
-            "insight": result['content'][0]['text'],
-            "model": result['model'],
-            "id": result['id']
+            "insight": response.content[0].text,
+            "model": response.model,
+            "id": response.id
         })
     except Exception as e:
-        print(f"Error in chat proxy: {str(e)}")
+        app.logger.error(f"Error in chat proxy: {str(e)}")
         return jsonify({
             "error": str(e),
             "insight": f"Error generating AI response: {str(e)}. Please try again later.",
@@ -124,8 +156,7 @@ Provide concise, data-driven insights and clear recommendations. Be specific and
             "id": f"error-{int(time.time())}"
         }), 500
 
-
-# Campaign insights proxy endpoint
+# Campaign insights proxy endpoint with the Anthropic SDK
 @app.route('/api/campaign-insights', methods=['POST'])
 def campaign_insights_proxy():
     try:
@@ -135,48 +166,40 @@ def campaign_insights_proxy():
         if not campaign:
             return jsonify({"error": "Campaign data is required"}), 400
         
-        # Craft the prompt for Claude
+        # Craft the system prompt for campaign analysis
         system_prompt = """You are an e-commerce marketing analytics expert. Analyze the provided campaign data. 
         Provide actionable insights and clear recommendations. Focus on profitability, ROAS, and optimization opportunities."""
         
-        # Make the request to Anthropic API
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                'Content-Type': 'application/json',
-                'X-API-Key': ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-            },
-            json={
-                'model': 'claude-3-7-sonnet-20250219',
-                'max_tokens': 1000,
-                'system': system_prompt,
-                'messages': [
-                    {
-                        'role': 'user',
-                        'content': f"Here is the campaign data:\n\n{json.dumps(campaign, indent=2)}\n\nIs this campaign profitable? What actions should be taken to improve its performance?"
-                    }
-                ]
-            }
+        # Create the user message with campaign data
+        user_message = f"Here is the campaign data:\n\n{json.dumps(campaign, indent=2)}\n\nIs this campaign profitable? What actions should be taken to improve its performance?"
+        
+        # Use the Anthropic SDK to create the message
+        response = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1000,
+            temperature=0,  # Lower temperature for more precise analytics
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_message
+                        }
+                    ]
+                }
+            ]
         )
         
-        if response.status_code != 200:
-            return jsonify({
-                "error": f"Anthropic API error: {response.status_code}",
-                "insight": f"Error generating campaign insights: {response.text}. Please try again later.",
-                "model": "Error",
-                "id": f"error-{int(time.time())}"
-            }), 500
-        
-        result = response.json()
-        
+        # Extract and return the response
         return jsonify({
-            "insight": result['content'][0]['text'],
-            "model": result['model'],
-            "id": result['id']
+            "insight": response.content[0].text,
+            "model": response.model,
+            "id": response.id
         })
     except Exception as e:
-        print(f"Error in campaign insights proxy: {str(e)}")
+        app.logger.error(f"Error in campaign insights proxy: {str(e)}")
         return jsonify({
             "error": str(e),
             "insight": f"Error generating campaign insights: {str(e)}. Please try again later.",
@@ -184,7 +207,7 @@ def campaign_insights_proxy():
             "id": f"error-{int(time.time())}"
         }), 500
 
-# Dashboard insights proxy endpoint
+# Dashboard insights proxy endpoint with the Anthropic SDK
 @app.route('/api/dashboard-insights', methods=['POST'])
 def dashboard_insights_proxy():
     try:
@@ -194,50 +217,42 @@ def dashboard_insights_proxy():
         if not dashboard:
             return jsonify({"error": "Dashboard data is required"}), 400
         
-        # Craft the prompt for Claude
+        # Craft the system prompt for dashboard analysis
         system_prompt = """You are an e-commerce marketing analytics expert. Analyze the provided dashboard data and provide comprehensive insights about the overall campaign performance. 
         Answer the question: "Are these e-commerce campaigns collectively profitable?"
         Include specific actionable recommendations for optimization, scaling successful campaigns, and addressing underperforming ones.
         Your analysis should be data-driven, highlighting key metrics like ROAS, profit margins, and overall ROI."""
         
-        # Make the request to Anthropic API
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                'Content-Type': 'application/json',
-                'X-API-Key': ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-            },
-            json={
-                'model': 'claude-3-7-sonnet-20250219',
-                'max_tokens': 1000,
-                'system': system_prompt,
-                'messages': [
-                    {
-                        'role': 'user',
-                        'content': f"Here is the e-commerce dashboard data:\n\n{json.dumps(dashboard, indent=2)}\n\nProvide a comprehensive analysis of the overall campaign performance, profitability, and specific recommendations for optimization."
-                    }
-                ]
-            }
+        # Create the user message with dashboard data
+        user_message = f"Here is the e-commerce dashboard data:\n\n{json.dumps(dashboard, indent=2)}\n\nProvide a comprehensive analysis of the overall campaign performance, profitability, and specific recommendations for optimization."
+        
+        # Use the Anthropic SDK to create the message
+        response = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1000,
+            temperature=0,  # Lower temperature for more precise analytics
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_message
+                        }
+                    ]
+                }
+            ]
         )
         
-        if response.status_code != 200:
-            return jsonify({
-                "error": f"Anthropic API error: {response.status_code}",
-                "insight": f"Error generating dashboard insights: {response.text}. Please try again later.",
-                "model": "Error",
-                "id": f"error-{int(time.time())}"
-            }), 500
-        
-        result = response.json()
-        
+        # Extract and return the response
         return jsonify({
-            "insight": result['content'][0]['text'],
-            "model": result['model'],
-            "id": result['id']
+            "insight": response.content[0].text,
+            "model": response.model,
+            "id": response.id
         })
     except Exception as e:
-        print(f"Error in dashboard insights proxy: {str(e)}")
+        app.logger.error(f"Error in dashboard insights proxy: {str(e)}")
         return jsonify({
             "error": str(e),
             "insight": f"Error generating dashboard insights: {str(e)}. Please try again later.",
@@ -259,7 +274,7 @@ def get_latest_data():
         else:
             return jsonify({"error": "No analysis files found"}), 404
     except Exception as e:
-        print(f"Error getting latest data: {str(e)}")
+        app.logger.error(f"Error getting latest data: {str(e)}")
         return jsonify({"error": f"Error getting latest data: {str(e)}"}), 500
 
 # Endpoint to serve CSV data files
@@ -286,9 +301,10 @@ def get_csv_file(filename):
             download_name=filename
         )
         response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
     except Exception as e:
-        print(f"Error serving file: {str(e)}")
+        app.logger.error(f"Error serving file: {str(e)}")
         return jsonify({"error": f"Error serving file: {str(e)}"}), 500
 
 # Add a health check endpoint
@@ -310,7 +326,21 @@ def serve(path):
 def favicon():
     return send_from_directory(app.static_folder, 'favicon.ico') if os.path.exists(app.static_folder + '/favicon.ico') else ('', 204)
 
+# Handle OPTIONS requests for CORS preflight
+@app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+@app.route('/<path:path>', methods=['OPTIONS'])
+def handle_options(path):
+    response = app.make_default_options_response()
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, Accept, anthropic-version')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    return response
+
 if __name__ == '__main__':
+    # Get port from environment variable or use default
+    port = int(os.environ.get('PORT', 5001))
+    host = os.environ.get('HOST', '0.0.0.0')
+    
     # Start scheduled updates in a separate thread
     update_thread = threading.Thread(
         target=lambda: schedule_daily_update(None),
@@ -319,4 +349,4 @@ if __name__ == '__main__':
     update_thread.start()
     
     # Run the Flask app
-    app.run(debug=True, port=5001, host='0.0.0.0')
+    app.run(debug=True, port=port, host=host)

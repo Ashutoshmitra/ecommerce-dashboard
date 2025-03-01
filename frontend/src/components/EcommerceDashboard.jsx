@@ -31,6 +31,9 @@ const EcommerceDashboard = ({
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [customDateStart, setCustomDateStart] = useState(null);
+  const [customDateEnd, setCustomDateEnd] = useState(null);
+  const [useCustomDateRange, setUseCustomDateRange] = useState(false);
 
   // Theme colors
   const themeColors = {
@@ -154,19 +157,165 @@ const EcommerceDashboard = ({
     loadData();
   }, [loadData]);
 
-  const filterDataByDays = (dataArray, daysBack) => {
-    if (!daysBack || !dataArray.length) return dataArray;
-    
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysBack);
-    
-    return dataArray.filter(item => {
-      if (!item['Campaign End']) return true;
-      const campaignEndDate = new Date(item['Campaign End']);
-      return campaignEndDate >= cutoffDate;
-    });
+/**
+ * Extract a date from a campaign name like "15 FEB - Urban Denim"
+ * @param {string} campaignName - The campaign name containing a date
+ * @return {Date|null} - Extracted date or null if not parseable
+ */
+const extractDateFromCampaignName = (campaignName) => {
+  if (!campaignName) return null;
+  
+  // Extract day and month from campaign name (e.g., "15 FEB - Urban Denim")
+  const match = campaignName.match(/^(\d+)\s+([A-Za-z]+)/);
+  if (!match) return null;
+  
+  const day = match[1];
+  const month = match[2].toUpperCase();
+  
+  // Map abbreviated and full month names to their numerical values
+  const monthMap = {
+    'JAN': 0, 'FEB': 1, 'MAR': 2, 'APR': 3, 'MAY': 4, 'JUN': 5,
+    'JUL': 6, 'AUG': 7, 'SEP': 8, 'OCT': 9, 'NOV': 10, 'DEC': 11,
+    'JANUARY': 0, 'FEBRUARY': 1, 'MARCH': 2, 'APRIL': 3, 'JUNE': 5,
+    'JULY': 6, 'AUGUST': 7, 'SEPTEMBER': 8, 'OCTOBER': 9, 'NOVEMBER': 10, 'DECEMBER': 11
   };
+  
+  // If month is not recognized, return null
+  if (monthMap[month] === undefined) return null;
+  
+  // Create a date object with the current year (2025 for this data)
+  const currentYear = new Date().getFullYear();
+  const date = new Date(currentYear, monthMap[month], parseInt(day));
+  
+  return date;
+};
 
+/**
+ * Filter data array based on days back from current date
+ * Uses campaign dates from either Campaign Start field or extracts from campaign name
+ */
+const filterDataByDays = useCallback((dataArray, daysBack) => {
+  if (!dataArray.length) return dataArray;
+  
+  // If using custom date range, filter by that instead of days back
+  if (useCustomDateRange && customDateStart && customDateEnd) {
+    return dataArray.filter(item => {
+      let campaignDate;
+      
+      // First try to use the Campaign Start date if available
+      if (item['Campaign Start']) {
+        campaignDate = new Date(item['Campaign Start']);
+      } else {
+        // Otherwise extract date from campaign name
+        const campaignName = item.campaignName || item[''] || '';
+        campaignDate = extractDateFromCampaignName(campaignName);
+      }
+      
+      // If we can't determine a date, include the campaign by default
+      if (!campaignDate) return true;
+      
+      // Include only campaigns between the custom date range
+      return campaignDate >= customDateStart && campaignDate <= customDateEnd;
+    });
+  }
+  
+  // Standard days back filtering
+  if (!daysBack) return dataArray;
+  
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysBack);
+  
+  return dataArray.filter(item => {
+    let campaignDate;
+    
+    // First try to use the Campaign Start date if available
+    if (item['Campaign Start']) {
+      campaignDate = new Date(item['Campaign Start']);
+    } else {
+      // Otherwise extract date from campaign name
+      const campaignName = item.campaignName || item[''] || '';
+      campaignDate = extractDateFromCampaignName(campaignName);
+    }
+    
+    // If we can't determine a date, include the campaign by default
+    if (!campaignDate) return true;
+    
+    // Include only campaigns from after the cutoff date
+    return campaignDate >= cutoffDate;
+  });
+}, [useCustomDateRange, customDateStart, customDateEnd]);
+
+  const filteredData = useCallback(() => {
+    if (!data.length) return [];
+    
+    // Filter data based on option selected (last 7 days, 30 days, etc.)
+    const filtered = filterDataByDays(data, filterDays);
+    
+    console.log(`Filtered data: ${filtered.length}/${data.length} campaigns shown for last ${filterDays} days`);
+    
+    return filtered;
+  }, [data, filterDays]);
+  
+  const renderFilterUI = () => (
+    <div className="mb-4 flex items-center space-x-2">
+      <span className="text-sm text-gray-600 dark:text-gray-400">
+        Filter campaigns by start date:
+      </span>
+      {useCustomDateRange ? (
+        <div className="flex items-center">
+          <span className="px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+            Custom Range: {customDateStart.toLocaleDateString()} to {customDateEnd.toLocaleDateString()}
+          </span>
+          <button 
+            className="ml-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            onClick={() => setUseCustomDateRange(false)}
+            title="Clear custom range"
+          >
+            ✕
+          </button>
+        </div>
+      ) : (
+        <select 
+          className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+          value={filterDays}
+          onChange={(e) => setFilterDays(Number(e.target.value))}
+          style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+        >
+          <option value={7}>Last 7 days</option>
+          <option value={30}>Last 30 days</option>
+          <option value={60}>Last 60 days</option>
+          <option value={90}>Last 90 days</option>
+          <option value={0}>All campaigns</option>
+        </select>
+      )}
+      
+      <div className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+        {useCustomDateRange ? (
+          <>
+            Showing campaigns in custom date range
+            ({filteredData().length} of {data.length} campaigns)
+          </>
+        ) : filterDays > 0 ? (
+          <>
+            Showing campaigns since {new Date(Date.now() - filterDays * 86400000).toLocaleDateString()}
+            ({filteredData().length} of {data.length} campaigns)
+          </>
+        ) : (
+          <>Showing all {data.length} campaigns</>
+        )}
+      </div>
+    </div>
+  );
+  
+  const formatCampaignDate = (campaign) => {
+    if (campaign['Campaign Start']) {
+      return new Date(campaign['Campaign Start']).toLocaleDateString();
+    }
+    
+    const campaignDate = extractDateFromCampaignName(campaign.campaignName || campaign[''] || '');
+    return campaignDate ? campaignDate.toLocaleDateString() : 'Unknown date';
+  };
+  
   const handleChatSubmit = async (e) => {
     e.preventDefault();
     
@@ -284,13 +433,6 @@ const EcommerceDashboard = ({
     }
   };
   
-  // Filter data based on selected days
-  const filteredData = useCallback(() => {
-    if (!data.length) return [];
-    return filterDataByDays(data, filterDays);
-  }, [data, filterDays]);
-
-
   // Download CSV data
   const downloadCSV = useCallback(() => {
     if (!data.length) return;
@@ -855,25 +997,15 @@ const summaryMetrics = useCallback(() => {
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-semibold">All Campaigns</h3>
             <div className="flex space-x-2">
-              <select 
-                className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                value={filterDays}
-                onChange={(e) => setFilterDays(Number(e.target.value))}
-                style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
-              >
-                <option value={7}>Last 7 days</option>
-                <option value={30}>Last 30 days</option>
-                <option value={60}>Last 60 days</option>
-                <option value={90}>Last 90 days</option>
-              </select>
             </div>
           </div>
-          
+          {renderFilterUI()}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
                   <th className="py-2 px-4 text-left">Campaign</th>
+                  <th className="py-2 px-4 text-left">Date</th> {/* New column */}
                   <th className="py-2 px-4 text-left">Product</th>
                   <th className="py-2 px-4 text-right">Spend</th>
                   <th className="py-2 px-4 text-right">Revenue</th>
@@ -1041,122 +1173,118 @@ const summaryMetrics = useCallback(() => {
     );
   };
   const renderSettingsTab = () => {
+    // Use the existing state variables instead of creating new ones
+    // customDateStart and customDateEnd are already defined at the top of your component
+    
+    // Handle applying the date range filter
+    const applyDateRangeFilter = () => {
+      // Temporarily disable the normal days filter
+      setFilterDays(0);
+      
+      // Set a flag to indicate we're using custom dates
+      setUseCustomDateRange(true);
+      
+      // Optionally switch to campaigns tab to show the filtered data
+      setActiveTab('campaigns');
+    };
+    
     return (
       <div className="space-y-6">
         <div 
           className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
           style={{ backgroundColor: theme.cardBackground, borderColor: theme.border }}
         >
-          <h3 className="text-lg font-semibold mb-4">Analysis Settings</h3>
+          <h3 className="text-lg font-semibold mb-4">Dashboard Settings</h3>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block mb-2">Date Range</label>
-              <div className="flex space-x-2">
-                <select 
-                  className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
-                  value={filterDays}
-                  onChange={(e) => setFilterDays(Number(e.target.value))}
-                  style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
-                >
-                  <option value={7}>Last 7 days</option>
-                  <option value={30}>Last 30 days</option>
-                  <option value={60}>Last 60 days</option>
-                  <option value={90}>Last 90 days</option>
-                  <option value={180}>Last 180 days</option>
-                  <option value={365}>Last 365 days</option>
-                </select>
+              <label className="block mb-2 font-medium">Custom Date Range</label>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Start Date</label>
+                  <input 
+                    type="date" 
+                    className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
+                    value={customDateStart ? customDateStart.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]}
+                    onChange={(e) => setCustomDateStart(new Date(e.target.value))}
+                    style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+                  />
+                </div>
                 
-                <button
-                  className="p-2 bg-blue-500 hover:bg-blue-600 text-white rounded"
+                <div>
+                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">End Date</label>
+                  <input 
+                    type="date" 
+                    className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
+                    value={customDateEnd ? customDateEnd.toISOString().split('T')[0] : new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0]}
+                    onChange={(e) => setCustomDateEnd(new Date(e.target.value))}
+                    style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+                  />
+                </div>
+                
+                <button 
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded w-full"
+                  onClick={applyDateRangeFilter}
                 >
-                  <Calendar size={20} />
+                  Apply Date Range
                 </button>
-              </div>
-              
-              <div className="mt-4">
-                <label className="block mb-2">Custom Date</label>
-                <input 
-                  type="date" 
-                  className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
-                  value={selectedDate.toISOString().split('T')[0]}
-                  onChange={(e) => setSelectedDate(new Date(e.target.value))}
-                  style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
-                />
+                
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Filter campaigns that occur between these dates
+                </div>
               </div>
             </div>
             
             <div>
-              <label className="block mb-2">Attribution Window (days)</label>
-              <input 
-                type="number" 
-                className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
-                value={attributionDays}
-                onChange={(e) => setAttributionDays(Number(e.target.value))}
-                min={1}
-                max={30}
-                style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
-              />
-              
-              <div className="mt-4">
-                <label className="block mb-2">Theme</label>
-                <div className="flex space-x-2">
-                  <button
-                    className={`flex-1 p-2 rounded ${!darkMode ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'}`}
-                    onClick={() => setDarkMode(false)}
-                  >
-                    <div className="flex items-center justify-center space-x-2">
-                      <Sun size={18} />
-                      <span>Light</span>
-                    </div>
-                  </button>
-                  
-                  <button
-                    className={`flex-1 p-2 rounded ${darkMode ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'}`}
-                    onClick={() => setDarkMode(true)}
-                  >
-                    <div className="flex items-center justify-center space-x-2">
-                      <Moon size={18} />
-                      <span>Dark</span>
-                    </div>
-                  </button>
-                </div>
+              <label className="block mb-2 font-medium">Theme</label>
+              <div className="flex space-x-2">
+                <button
+                  className={`flex-1 p-2 rounded ${!darkMode ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'}`}
+                  onClick={() => setDarkMode(false)}
+                >
+                  <div className="flex items-center justify-center space-x-2">
+                    <Sun size={18} />
+                    <span>Light</span>
+                  </div>
+                </button>
+                
+                <button
+                  className={`flex-1 p-2 rounded ${darkMode ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'}`}
+                  onClick={() => setDarkMode(true)}
+                >
+                  <div className="flex items-center justify-center space-x-2">
+                    <Moon size={18} />
+                    <span>Dark</span>
+                  </div>
+                </button>
               </div>
-            </div>
-          </div>
-          
-          <div className="mt-6">
-            <label className="block mb-2">Data Update Frequency</label>
-            <div className="p-3 bg-gray-100 dark:bg-gray-700 rounded">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium">Daily Automatic Update</div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    Data will be refreshed once every 24 hours
+              
+              <div className="mt-6">
+                <label className="block mb-2 font-medium">Data Update Frequency</label>
+                <div className="p-3 bg-gray-100 dark:bg-gray-700 rounded">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">Daily Automatic Update</div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                        Data will be refreshed once every 24 hours
+                      </div>
+                    </div>
+                    <div>
+                      <label className="flex items-center cursor-pointer">
+                        <div className="relative">
+                          <input type="checkbox" className="sr-only" defaultChecked />
+                          <div className="block bg-gray-300 dark:bg-gray-600 w-14 h-8 rounded-full"></div>
+                          <div className="dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition transform translate-x-6"></div>
+                        </div>
+                      </label>
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <label className="flex items-center cursor-pointer">
-                    <div className="relative">
-                      <input type="checkbox" className="sr-only" defaultChecked />
-                      <div className="block bg-gray-300 dark:bg-gray-600 w-14 h-8 rounded-full"></div>
-                      <div className="dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition transform translate-x-6"></div>
-                    </div>
-                  </label>
-                </div>
               </div>
             </div>
           </div>
           
-          <div className="mt-6 flex justify-between">
-            <button
-              className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded flex items-center space-x-2"
-              onClick={() => generateAIInsight()}
-            >
-              <Zap size={18} />
-              <span>Generate AI Insights</span>
-            </button>
-            
+          <div className="mt-6 flex justify-end">
             <div className="flex space-x-2">
               <button
                 className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded flex items-center space-x-2"
@@ -1179,6 +1307,22 @@ const summaryMetrics = useCallback(() => {
         </div>
       </div>
     );
+  };
+
+  const applyCustomDateFilter = (startDate, endDate) => {
+    // Temporarily disable the normal days filter
+    setFilterDays(0);
+    
+    // Set custom date range for filtering
+    // We'll need to use these in a modified version of the filterDataByDays function
+    setCustomDateStart(startDate);
+    setCustomDateEnd(endDate);
+    
+    // Set a flag to indicate we're using custom dates
+    setUseCustomDateRange(true);
+    
+    // Optionally switch to campaigns tab to show the filtered data
+    setActiveTab('campaigns');
   };
   
   const renderAIInsightsTab = () => {

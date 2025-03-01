@@ -4,7 +4,12 @@ import AnthropicService from './AnthropicService';
 class ApiIntegrationService {
   constructor() {
     this.anthropicService = new AnthropicService();
-    this.baseUrl = 'http://localhost:5001'; // Base URL for backend API
+    
+    // Dynamically determine the base URL instead of hardcoding localhost
+    this.baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      ? 'http://localhost:5001'  // Use localhost in development
+      : '';  // In production, use relative URLs to same domain
+    
     this.isScheduled = false;
     this.scheduledUpdateInterval = 24 * 60 * 60 * 1000; // 24 hours
     this.updateTimer = null;
