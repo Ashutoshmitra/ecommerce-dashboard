@@ -37,13 +37,26 @@ SHOPIFY_URL = f"https://{SHOPIFY_API_KEY}:{SHOPIFY_PASSWORD}@{SHOPIFY_SHOP_NAME}
 # SHOPIFY API FUNCTIONS
 #############################################
 
+def update_shopify_url(api_key=None, password=None, shop_name=None):
+    """Update the Shopify URL based on potentially updated credentials"""
+    global SHOPIFY_URL
+    
+    # Use provided values or fall back to global values
+    api_key = api_key if api_key is not None else SHOPIFY_API_KEY
+    password = password if password is not None else SHOPIFY_PASSWORD
+    shop_name = shop_name if shop_name is not None else SHOPIFY_SHOP_NAME
+    
+    # Update the URL
+    SHOPIFY_URL = f"https://{api_key}:{password}@{shop_name}.myshopify.com/admin/api/2023-10"
+    return SHOPIFY_URL
+
 def fetch_from_shopify_api(endpoint, params=None):
     """Generic function to fetch data from any Shopify API endpoint with rate limiting handling"""
     url = f"{SHOPIFY_URL}/{endpoint}"
     response = requests.get(url, params=params)
     
     if response.status_code == 200:
-        return response.json()
+        return response  # Return the full response object to access headers
     elif response.status_code == 429:  # Rate limit exceeded
         print("Rate limit exceeded. Waiting before retry...")
         time.sleep(2)  # Wait 2 seconds and try again
@@ -84,62 +97,73 @@ def fetch_paginated_shopify_data(endpoint, params=None, max_retries=3):
             current_params = params.copy()
             if next_page_info:
                 # Use page_info for subsequent pages
-                current_params = {'page_info': next_page_info}
+                current_params = {'page_info': next_page_info, 'limit': 250}
             
             # Make the API request
             response = fetch_from_shopify_api(endpoint, current_params)
             
             # Handle potential API errors
             if response is None:
-                print(f"Failed to fetch data for {endpoint}. Retrying...")
-                raise Exception("API request failed")
+                print(f"Failed to fetch data for {endpoint}. Stopping.")
+                break
+            
+            # Get the JSON data from the response
+            response_data = response.json()
             
             # Find the main data key dynamically
-            data_key = next(iter(response)) if response else None
+            data_key = next(iter(response_data)) if response_data else None
             
-            if not data_key or data_key not in response:
+            if not data_key or data_key not in response_data:
                 print(f"No data found in response for {endpoint}")
                 break
             
             # Extract and extend data
-            current_data = response[data_key]
+            current_data = response_data[data_key]
             all_data.extend(current_data)
             page_count += 1
             
             print(f"Fetched page {page_count} with {len(current_data)} items, total so far: {len(all_data)}")
             
-            # Check for pagination
-            link_header = response.get('link', '')
+            # Check for pagination in the Link header
+            link_header = response.headers.get('Link', '')
+            print(f"Link header: {link_header}")
             
             # Determine if there's a next page
             if 'rel="next"' not in link_header:
-                # No more pages
+                print("No next page found. Stopping.")
                 break
             
-            # Extract next page info
+            # Extract next page info with improved parsing
             next_links = [link for link in link_header.split(',') if 'rel="next"' in link]
-            if next_links:
-                next_page_info = next_links[0].split('page_info=')[1].split('&')[0]
-            else:
-                # No more pages to process
+            if not next_links:
+                print("No next link parsed. Stopping.")
                 break
+            
+            next_link = next_links[0].strip()
+            start_idx = next_link.find('page_info=') + len('page_info=')
+            end_idx = next_link.find('>;')
+            
+            if start_idx == -1 or end_idx == -1:
+                print("Failed to parse page_info from Link header. Stopping.")
+                break
+                
+            next_page_info = next_link[start_idx:end_idx]
+            print(f"Next page_info: {next_page_info}")
         
         except Exception as e:
             # Implement exponential backoff for retries
             retry_count += 1
             if retry_count > max_retries:
-                print(f"Max retries exceeded for {endpoint}. Stopping.")
+                print(f"Max retries exceeded for {endpoint}. Error: {e}. Stopping.")
                 break
             
             wait_time = 2 ** retry_count  # Exponential backoff
-            print(f"Error occurred: {e}")
-            print(f"Retrying in {wait_time} seconds (Attempt {retry_count}/{max_retries})")
+            print(f"Error: {e}. Retrying in {wait_time} seconds (Attempt {retry_count}/{max_retries})")
             time.sleep(wait_time)
     
     print(f"Total items fetched for {endpoint}: {len(all_data)}")
     return all_data
 
-# Modify existing functions to use the enhanced pagination
 def get_all_collections():
     """Get all collections from the shop (both custom and smart collections)"""
     all_collections = []
@@ -176,7 +200,7 @@ def get_all_collections():
 
 def get_all_products():
     """Get all products from the shop regardless of collection membership"""
-    print("Fetching all products from Shopify...")
+    print("Fetching all products from Shopify with prices...")
     
     # Fetch all products with improved pagination
     all_products = fetch_paginated_shopify_data("products.json")
@@ -184,17 +208,32 @@ def get_all_products():
     # Format the product data
     formatted_products = []
     for product in all_products:
+        # Get the minimum price from variants (if multiple variants exist)
+        variants = product.get('variants', [])
+        prices = [float(v['price']) for v in variants if v.get('price') is not None]
+        price = min(prices) if prices else 0.0
+        compare_at_prices = [float(v['compare_at_price']) for v in variants if v.get('compare_at_price') is not None]
+        compare_at_price = min(compare_at_prices) if compare_at_prices else None
+        
+        # Check availability based on inventory_quantity
+        # A product is considered available if any variant has inventory_quantity > 0
+        available = any(v.get('inventory_quantity', 0) > 0 for v in variants) if variants else False
+        
         formatted_products.append({
             'product_id': product['id'],
             'title': product['title'],
             'handle': product['handle'],
             'url': f"https://{SHOPIFY_SHOP_NAME}.myshopify.com/products/{product['handle']}",
+            'price': price,
+            'compare_at_price': compare_at_price,
+            'variant_count': len(variants),
+            'available': available,
             'created_at': product.get('created_at', ''),
             'updated_at': product.get('updated_at', ''),
             'published_at': product.get('published_at', '')
         })
     
-    print(f"Found {len(formatted_products)} products")
+    print(f"Found {len(formatted_products)} products with price information")
     return formatted_products
 
 def get_products_in_collection(collection_id, collection_type):
@@ -204,21 +243,24 @@ def get_products_in_collection(collection_id, collection_type):
     # For custom collections, we can directly query products
     if collection_type == 'custom':
         endpoint = f"collections/{collection_id}/products.json"
+        params = None
     # For smart collections, we need to get the products via a different endpoint
     else:
         endpoint = f"products.json"
         params = {'collection_id': collection_id}
     
-    products_data = fetch_from_shopify_api(endpoint, params if collection_type == 'smart' else None)
+    response = fetch_from_shopify_api(endpoint, params)
     
-    if products_data and 'products' in products_data:
-        for product in products_data['products']:
-            products.append({
-                'product_id': product['id'],
-                'title': product['title'],
-                'handle': product['handle'],
-                'url': f"https://{SHOPIFY_SHOP_NAME}.myshopify.com/products/{product['handle']}"
-            })
+    if response:
+        products_data = response.json()
+        if 'products' in products_data:
+            for product in products_data['products']:
+                products.append({
+                    'product_id': product['id'],
+                    'title': product['title'],
+                    'handle': product['handle'],
+                    'url': f"https://{SHOPIFY_SHOP_NAME}.myshopify.com/products/{product['handle']}"
+                })
     
     return products
 
@@ -513,7 +555,6 @@ class FacebookAdAnalyzer:
             'clicks',
             'ctr',
             'cpc',
-            'actions',
             'website_purchase_roas',
             'date_start',
             'date_stop'
@@ -525,13 +566,17 @@ class FacebookAdAnalyzer:
             'fields': ','.join(fields),
             'level': level,
             'limit': 50,
-            'time_increment': 1  # Daily breakdown
+            # Removing time_increment to prevent large data volumes that may cause errors
         }
         
-        print(f"Fetching financial metrics from {start_date_str} to {end_date_str}...")
-        metrics_data = self._make_paginated_request(url, params)
-        
-        return metrics_data
+        try:
+            print(f"Fetching financial metrics from {start_date_str} to {end_date_str}...")
+            metrics_data = self._make_paginated_request(url, params)
+            return metrics_data
+        except Exception as e:
+            print(f"Error fetching financial metrics: {e}")
+            # Return empty list instead of None to prevent downstream errors
+            return []
     
     def get_facebook_data(self, start_date, end_date):
         """Get all Facebook Ads data for the specified date range"""
@@ -1000,8 +1045,8 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
         cpa = spend / attributed_orders_count if attributed_orders_count > 0 else np.nan
         
         # Calculate Profit Margin (as a percentage)
-        profit_margin_pct = (attributed_gross_profit / attributed_revenue) * 100 if attributed_revenue > 0 else np.nan
-        total_profit_margin_pct = (total_gross_profit / total_revenue) * 100 if total_revenue > 0 else np.nan
+        profit_margin_pct = (attributed_net_profit / attributed_revenue) * 100 if attributed_revenue > 0 else np.nan
+        total_profit_margin_pct = (total_net_profit / total_revenue) * 100 if total_revenue > 0 else np.nan
         
         # Calculate Sales per Product (for campaigns with multiple products)
         sales_per_product = {}
@@ -1122,6 +1167,10 @@ def main():
     parser.add_argument('--attribution_window', type=int, default=7, help='Attribution window in days')
     parser.add_argument('--extended_analysis', type=int, default=30, help='Extended analysis window in days')
     parser.add_argument('--cogs_percentage', type=float, default=0.4, help='COGS as percentage of revenue')
+    parser.add_argument('--output_dir', type=str, default=".", help='Directory to save output files')
+    parser.add_argument('--api_key', type=str, help='Shopify API Key')
+    parser.add_argument('--password', type=str, help='Shopify API Password')
+    parser.add_argument('--shop_name', type=str, help='Shopify Shop Name')
     
     args = parser.parse_args()
     
@@ -1131,6 +1180,14 @@ def main():
     EXTENDED_ANALYSIS_DAYS = args.extended_analysis
     COGS_PERCENTAGE = args.cogs_percentage
     
+    # Update Shopify credentials if provided
+    if args.api_key or args.password or args.shop_name:
+        update_shopify_url(
+            api_key=args.api_key if args.api_key else None,
+            password=args.password if args.password else None,
+            shop_name=args.shop_name if args.shop_name else None
+        )
+    
     # Calculate date range
     if args.start_date and args.end_date:
         start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
@@ -1139,10 +1196,24 @@ def main():
         end_date = datetime.now()
         start_date = end_date - timedelta(days=args.days_back)
     
+    # Make start_date and end_date timezone aware
+    try:
+        # Try to add timezone info to dates if not present
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    except Exception as e:
+        print(f"Warning: Could not add timezone info to dates: {e}")
+    
     print(f"\nRunning analysis from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
     print(f"Attribution window: {ATTRIBUTION_WINDOW_DAYS} days")
     print(f"Extended analysis window: {EXTENDED_ANALYSIS_DAYS} days")
     print(f"COGS percentage: {COGS_PERCENTAGE * 100}%")
+    
+    # Create output directory if it doesn't exist
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     
     # Get Shopify data
     print("\n=== FETCHING SHOPIFY DATA ===")
