@@ -34,6 +34,12 @@ const EcommerceDashboard = ({
   const [customDateStart, setCustomDateStart] = useState(null);
   const [customDateEnd, setCustomDateEnd] = useState(null);
   const [useCustomDateRange, setUseCustomDateRange] = useState(false);
+  // State for script execution logs and loading state
+  const [scriptLogs, setScriptLogs] = useState('');
+  const [isRunningScript, setIsRunningScript] = useState(false);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(
+    localStorage.getItem('scheduled_updates') === 'true'
+  );
 
   // Theme colors
   const themeColors = {
@@ -465,8 +471,8 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
           const roas = campaign['Total ROAS'] || 0;
           
           const insight = isProfit 
-            ? `Campaign "${campaign.campaignName}" is profitable with a net profit of $${campaign['Total Net Profit'].toFixed(2)}. The ROAS is ${roas.toFixed(2)}, which means for every $1 spent, you're earning $${roas.toFixed(2)}. This campaign is performing well and could benefit from increased budget allocation.`
-            : `Campaign "${campaign.campaignName}" is currently unprofitable with a net loss of $${Math.abs(campaign['Total Net Profit']).toFixed(2)}. The ROAS is ${roas.toFixed(2)}, below the breakeven point of 1.0. Consider adjusting targeting, creative elements, or pausing this campaign if performance doesn't improve in the next 3-5 days.`;
+            ? `Campaign "${campaign.campaignName}" is profitable with a net profit of €${campaign['Total Net Profit'].toFixed(2)}. The ROAS is ${roas.toFixed(2)}, which means for every $1 spent, you're earning €${roas.toFixed(2)}. This campaign is performing well and could benefit from increased budget allocation.`
+            : `Campaign "${campaign.campaignName}" is currently unprofitable with a net loss of €${Math.abs(campaign['Total Net Profit']).toFixed(2)}. The ROAS is ${roas.toFixed(2)}, below the breakeven point of 1.0. Consider adjusting targeting, creative elements, or pausing this campaign if performance doesn't improve in the next 3-5 days.`;
           
           insights = { insight };
         } else {
@@ -477,8 +483,8 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
           const avgRoas = data.reduce((sum, c) => sum + (c['Total ROAS'] || 0), 0) / totalCampaigns;
           
           const insight = totalProfit > 0
-            ? `Your e-commerce campaigns are collectively profitable with a total net profit of $${totalProfit.toFixed(2)}. ${profitableCampaigns} out of ${totalCampaigns} campaigns (${((profitableCampaigns/totalCampaigns)*100).toFixed(1)}%) are profitable. Your average ROAS across all campaigns is ${avgRoas.toFixed(2)}. Focus on scaling your top performers and consider reallocating budget from underperforming campaigns.`
-            : `Your e-commerce campaigns are collectively showing a net loss of $${Math.abs(totalProfit).toFixed(2)}. Only ${profitableCampaigns} out of ${totalCampaigns} campaigns (${((profitableCampaigns/totalCampaigns)*100).toFixed(1)}%) are profitable. Your average ROAS is ${avgRoas.toFixed(2)}, below the breakeven point. Focus on optimizing targeting, improving creative elements, and possibly pausing the worst-performing campaigns.`;
+            ? `Your e-commerce campaigns are collectively profitable with a total net profit of €${totalProfit.toFixed(2)}. ${profitableCampaigns} out of ${totalCampaigns} campaigns (${((profitableCampaigns/totalCampaigns)*100).toFixed(1)}%) are profitable. Your average ROAS across all campaigns is ${avgRoas.toFixed(2)}. Focus on scaling your top performers and consider reallocating budget from underperforming campaigns.`
+            : `Your e-commerce campaigns are collectively showing a net loss of €${Math.abs(totalProfit).toFixed(2)}. Only ${profitableCampaigns} out of ${totalCampaigns} campaigns (${((profitableCampaigns/totalCampaigns)*100).toFixed(1)}%) are profitable. Your average ROAS is ${avgRoas.toFixed(2)}, below the breakeven point. Focus on optimizing targeting, improving creative elements, and possibly pausing the worst-performing campaigns.`;
             
           insights = { insight };
         }
@@ -667,14 +673,14 @@ const summaryMetrics = useCallback(() => {
                 <h4 className="font-bold mb-2">Financial Summary</h4>
                 <div className="grid grid-cols-2 gap-2">
                   <div>Ad Spend:</div>
-                  <div className="text-right">${modalContent['Ad Spend']?.toFixed(2) || '0.00'}</div>
+                  <div className="text-right">€{modalContent['Ad Spend']?.toFixed(2) || '0.00'}</div>
                   
                   <div>Total Revenue:</div>
-                  <div className="text-right">${modalContent['Total Revenue']?.toFixed(2) || '0.00'}</div>
+                  <div className="text-right">€{modalContent['Total Revenue']?.toFixed(2) || '0.00'}</div>
                   
                   <div>Net Profit:</div>
                   <div className="text-right" style={{ color: (modalContent['Total Net Profit'] || 0) > 0 ? theme.positive : theme.negative }}>
-                    ${modalContent['Total Net Profit']?.toFixed(2) || '0.00'}
+                    €{modalContent['Total Net Profit']?.toFixed(2) || '0.00'}
                   </div>
                   
                   <div>ROAS:</div>
@@ -709,7 +715,7 @@ const summaryMetrics = useCallback(() => {
                   
                   <div>CPA:</div>
                   <div className="text-right">
-                    {modalContent['CPA'] ? `$${modalContent['CPA'].toFixed(2)}` : 'N/A'}
+                    {modalContent['CPA'] ? `€${modalContent['CPA'].toFixed(2)}` : 'N/A'}
                   </div>
                 </div>
               </div>
@@ -764,13 +770,13 @@ const summaryMetrics = useCallback(() => {
         {[
           { 
             title: 'Total Revenue', 
-            value: `$${metrics.totalRevenue?.toFixed(2) || '0.00'}`,
+            value: `€${metrics.totalRevenue?.toFixed(2) || '0.00'}`,
             icon: <DollarSign size={20} />,
             color: theme.primary
           },
           { 
             title: 'Net Profit', 
-            value: `$${metrics.totalProfit?.toFixed(2) || '0.00'}`,
+            value: `€${metrics.totalProfit?.toFixed(2) || '0.00'}`,
             icon: <TrendingUp size={20} />,
             color: metrics.totalProfit >= 0 ? theme.positive : theme.negative
           },
@@ -907,7 +913,7 @@ const summaryMetrics = useCallback(() => {
                 <Tooltip 
                   formatter={(value, name) => {
                     if (name === 'revenue' || name === 'profit') {
-                      return [`$${value.toFixed(2)}`, name.charAt(0).toUpperCase() + name.slice(1)];
+                      return [`€${value.toFixed(2)}`, name.charAt(0).toUpperCase() + name.slice(1)];
                     }
                     return [value, name.charAt(0).toUpperCase() + name.slice(1)];
                   }}
@@ -954,7 +960,7 @@ const summaryMetrics = useCallback(() => {
                 <Tooltip 
                   formatter={(value, name) => {
                     if (name === 'spend' || name === 'revenue' || name === 'profit') {
-                      return [`$${value.toFixed(2)}`, name.charAt(0).toUpperCase() + name.slice(1)];
+                      return [`€${value.toFixed(2)}`, name.charAt(0).toUpperCase() + name.slice(1)];
                     }
                     return [value.toFixed(2), name.charAt(0).toUpperCase() + name.slice(1)];
                   }}
@@ -1005,54 +1011,63 @@ const summaryMetrics = useCallback(() => {
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
                   <th className="py-2 px-4 text-left">Campaign</th>
-                  <th className="py-2 px-4 text-left">Date</th> {/* New column */}
-                  <th className="py-2 px-4 text-left">Product</th>
                   <th className="py-2 px-4 text-right">Spend</th>
                   <th className="py-2 px-4 text-right">Revenue</th>
                   <th className="py-2 px-4 text-right">ROAS</th>
                   <th className="py-2 px-4 text-right">Profit</th>
-                  <th className="py-2 px-4 text-center">Actions</th>
+                  <th className="py-2 px-4 text-right">Margin %</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredData().map((campaign, index) => (
-                  <tr 
-                    key={index}
-                    className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
-                    style={{ borderColor: theme.border }}
-                  >
-                    <td className="py-2 px-4">
-                      <div className="truncate max-w-xs">
-                        {campaign.campaignName}
-                      </div>
-                    </td>
-                    <td className="py-2 px-4">
-                      <div className="truncate max-w-xs">
-                        {campaign['Product Name'] || 'Unknown'}
-                      </div>
-                    </td>
-                    <td className="py-2 px-4 text-right">${campaign['Ad Spend']?.toFixed(2)}</td>
-                    <td className="py-2 px-4 text-right">${campaign['Total Revenue']?.toFixed(2)}</td>
-                    <td className="py-2 px-4 text-right" style={{ 
-                      color: (campaign['Total ROAS'] || 0) >= 1 ? theme.positive : theme.negative 
-                    }}>
-                      {campaign['Total ROAS']?.toFixed(2) || '0.00'}
-                    </td>
-                    <td className="py-2 px-4 text-right" style={{ 
-                      color: (campaign['Total Net Profit'] || 0) >= 0 ? theme.positive : theme.negative 
-                    }}>
-                      ${campaign['Total Net Profit']?.toFixed(2)}
-                    </td>
-                    <td className="py-2 px-4 text-center">
-                      <button 
-                        className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm"
-                        onClick={() => showCampaignDetails(campaign)}
+              {filteredData().map((campaign, index) => (
+              <tr 
+                key={index}
+                className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
+                style={{ borderColor: theme.border }}
+              >
+                <td className="py-2 px-4">
+                  <div className="truncate max-w-xs" title={campaign.campaignName}>
+                    {campaign.URL ? (
+                      <a 
+                        href={campaign.URL} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-500 hover:underline"
                       >
-                        Details
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        {campaign.campaignName}
+                      </a>
+                    ) : (
+                      campaign.campaignName
+                    )}
+                  </div>
+                </td>
+                <td className="py-2 px-4 text-right">€{campaign['Ad Spend']?.toFixed(2)}</td>
+                <td className="py-2 px-4 text-right">€{campaign['Total Revenue']?.toFixed(2)}</td>
+                <td className="py-2 px-4 text-right" style={{ 
+                  color: (campaign['Total ROAS'] || 0) >= 1 ? theme.positive : theme.negative 
+                }}>
+                  {campaign['Total ROAS']?.toFixed(2) || '0.00'}
+                </td>
+                <td className="py-2 px-4 text-right" style={{ 
+                  color: (campaign['Total Net Profit'] || 0) >= 0 ? theme.positive : theme.negative 
+                }}>
+                  €{campaign['Total Net Profit']?.toFixed(2)}
+                </td>
+                <td className="py-2 px-4 text-right" style={{ 
+                  color: (campaign['Total Profit Margin (%)'] || 0) >= 0 ? theme.positive : theme.negative 
+                }}>
+                  {campaign['Total Profit Margin (%)']?.toFixed(2) || '0.00'}%
+                </td>
+                <td className="py-2 px-4 text-center">
+                  <button 
+                    className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm"
+                    onClick={() => showCampaignDetails(campaign)}
+                  >
+                    Details
+                  </button>
+                </td>
+              </tr>
+            ))}
               </tbody>
             </table>
           </div>
@@ -1090,7 +1105,7 @@ const summaryMetrics = useCallback(() => {
                 <Tooltip 
                   formatter={(value, name) => {
                     if (name === 'revenue' || name === 'profit') {
-                      return [`$${value.toFixed(2)}`, name.charAt(0).toUpperCase() + name.slice(1)];
+                      return [`€${value.toFixed(2)}`, name.charAt(0).toUpperCase() + name.slice(1)];
                     }
                     return [value, name.charAt(0).toUpperCase() + name.slice(1)];
                   }}
@@ -1136,7 +1151,7 @@ const summaryMetrics = useCallback(() => {
                   <th className="py-2 px-4 text-right">Revenue</th>
                   <th className="py-2 px-4 text-right">Profit</th>
                   <th className="py-2 px-4 text-right">Campaigns</th>
-                  <th className="py-2 px-4 text-right">Margin</th>
+                  <th className="py-2 px-4 text-right">Margin %</th>
                 </tr>
               </thead>
               <tbody>
@@ -1151,11 +1166,11 @@ const summaryMetrics = useCallback(() => {
                         {product.name}
                       </div>
                     </td>
-                    <td className="py-2 px-4 text-right">${product.revenue.toFixed(2)}</td>
+                    <td className="py-2 px-4 text-right">€{product.revenue.toFixed(2)}</td>
                     <td className="py-2 px-4 text-right" style={{ 
                       color: product.profit >= 0 ? theme.positive : theme.negative 
                     }}>
-                      ${product.profit.toFixed(2)}
+                      €{product.profit.toFixed(2)}
                     </td>
                     <td className="py-2 px-4 text-right">{product.campaigns}</td>
                     <td className="py-2 px-4 text-right" style={{ 
@@ -1173,9 +1188,7 @@ const summaryMetrics = useCallback(() => {
     );
   };
   const renderSettingsTab = () => {
-    // Use the existing state variables instead of creating new ones
-    // customDateStart and customDateEnd are already defined at the top of your component
-    
+  
     // Handle applying the date range filter
     const applyDateRangeFilter = () => {
       // Temporarily disable the normal days filter
@@ -1188,6 +1201,60 @@ const summaryMetrics = useCallback(() => {
       setActiveTab('campaigns');
     };
     
+    // Handle refreshing data
+    const handleRefreshData = async () => {
+      setIsRunningScript(true);
+      setScriptLogs('Starting data refresh...\n');
+      
+      try {
+        // Call the API to run the script
+        const result = await onRunScript({
+          daysBack: filterDays || 30,
+          attributionWindow: attributionDays || 7,
+          extendedAnalysis: 30,
+          cogsPercentage: 0.4
+        });
+        
+        // Update the logs with the script output
+        setScriptLogs(prev => 
+          prev + 
+          `\nScript execution ${result.status}\n` +
+          `Message: ${result.message}\n` +
+          `\nScript output:\n${result.stdout || ''}\n` +
+          `\nErrors (if any):\n${result.stderr || ''}\n` +
+          `\nThis may include Facebook API rate limit errors, which are expected.`
+        );
+        
+        // If successful, reload the data
+        if (result.status === 'success') {
+          setScriptLogs(prev => prev + '\nRefreshing dashboard with new data...\n');
+          await loadData();
+          setScriptLogs(prev => prev + 'Dashboard refresh complete!\n');
+        }
+      } catch (error) {
+        setScriptLogs(prev => 
+          prev + 
+          `\nError running script: ${error.message}\n` +
+          `Facebook API rate limits may have been exceeded. This is normal and expected.\n`
+        );
+      } finally {
+        setIsRunningScript(false);
+      }
+    };
+    
+    // Handle auto-update toggle
+    const handleAutoUpdateToggle = (enabled) => {
+      setAutoUpdateEnabled(enabled);
+      
+      // Call the parent component function to toggle scheduled updates
+      if (onToggleScheduledUpdates) {
+        onToggleScheduledUpdates(enabled);
+      }
+      
+      // Store the setting in localStorage
+      localStorage.setItem('scheduled_updates', String(enabled));
+    };
+      
     return (
       <div className="space-y-6">
         <div 
@@ -1260,29 +1327,38 @@ const summaryMetrics = useCallback(() => {
               </div>
               
               <div className="mt-6">
-                <label className="block mb-2 font-medium">Data Update Frequency</label>
+                <label className="block mb-2 font-medium">Data Update Settings</label>
                 <div className="p-3 bg-gray-100 dark:bg-gray-700 rounded">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="font-medium">Daily Automatic Update</div>
                       <div className="text-sm text-gray-500 dark:text-gray-400">
-                        Data will be refreshed once every 24 hours
+                        Data will be refreshed once every 24 hours (enabled by default)
                       </div>
                     </div>
-                    <div>
-                      <label className="flex items-center cursor-pointer">
-                        <div className="relative">
-                          <input type="checkbox" className="sr-only" defaultChecked />
-                          <div className="block bg-gray-300 dark:bg-gray-600 w-14 h-8 rounded-full"></div>
-                          <div className="dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition transform translate-x-6"></div>
-                        </div>
-                      </label>
+                    <div className="text-sm text-blue-500">
+                      Active
                     </div>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-2">
+                    Note: Auto-update is always enabled to ensure your data stays current
                   </div>
                 </div>
               </div>
             </div>
           </div>
+          
+          {/* Script logs section */}
+          {scriptLogs && (
+            <div className="mt-6">
+              <label className="block mb-2 font-medium">Script Execution Logs</label>
+              <div className="p-3 bg-gray-100 dark:bg-gray-700 rounded h-60 overflow-y-auto">
+                <pre className="text-xs font-mono whitespace-pre-wrap" style={{ color: theme.foreground }}>
+                  {scriptLogs}
+                </pre>
+              </div>
+            </div>
+          )}
           
           <div className="mt-6 flex justify-end">
             <div className="flex space-x-2">
@@ -1297,10 +1373,20 @@ const summaryMetrics = useCallback(() => {
               
               <button
                 className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded flex items-center space-x-2"
-                onClick={loadData}
+                onClick={handleRefreshData}
+                disabled={isRunningScript}
               >
-                <RefreshCw size={18} />
-                <span>Refresh Data</span>
+                {isRunningScript ? (
+                  <>
+                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full mr-2" />
+                    <span>Running Script...</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={18} />
+                    <span>Refresh Data</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1308,7 +1394,7 @@ const summaryMetrics = useCallback(() => {
       </div>
     );
   };
-
+  
   const applyCustomDateFilter = (startDate, endDate) => {
     // Temporarily disable the normal days filter
     setFilterDays(0);

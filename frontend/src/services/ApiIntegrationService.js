@@ -127,38 +127,71 @@ class ApiIntegrationService {
     }
   }
 
-  /**
-   * Run the analysis script
-   * 
-   * @param {Object} params - Script parameters
-   * @returns {Promise<Object>} - Result of the script execution
-   */
-  async runAnalysisScript(params = {}) {
-    try {
-      console.log('Running analysis script with params:', params);
-      const response = await fetch(`${this.baseUrl}/api/run-script`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(params || {
-          daysBack: 30,
-          attributionWindow: 7,
-          extendedAnalysis: 30,
-          cogsPercentage: 0.4
-        }),
-      });
+/**
+ * Run the analysis script
+ * 
+ * @param {Object} params - Script parameters
+ * @returns {Promise<Object>} - Result of the script execution
+ */
+async runAnalysisScript(params = {}) {
+  try {
+    console.log('Running analysis script with params:', params);
+    
+    // Set a longer timeout for this request as script execution can take time
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+    
+    const response = await fetch(`${this.baseUrl}/api/run-script`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params || {
+        daysBack: 30,
+        attributionWindow: 7,
+        extendedAnalysis: 30,
+        cogsPercentage: 0.4
+      }),
+      signal: controller.signal
+    });
 
-      if (!response.ok) {
-        throw new Error(`Script execution failed: ${response.status} ${response.statusText}`);
-      }
+    clearTimeout(timeoutId); // Clear the timeout
 
-      return await response.json();
-    } catch (error) {
-      console.error('Error running analysis script:', error);
-      throw error;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Script execution failed:', errorText);
+      throw new Error(`Script execution failed: ${response.status} ${response.statusText}`);
     }
+
+    const result = await response.json();
+    
+    // Log Facebook rate limit warnings if they exist in stdout/stderr
+    if (result.stdout && result.stdout.includes('rate limit')) {
+      console.warn('Facebook API rate limit warning detected in script output');
+    }
+    
+    if (result.stderr && result.stderr.includes('rate limit')) {
+      console.warn('Facebook API rate limit error detected in script output');
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error running analysis script:', error);
+    
+    // Check if it's an abort error (timeout)
+    if (error.name === 'AbortError') {
+      throw new Error('Script execution timed out. The operation may have been too resource-intensive or there may be network issues.');
+    }
+    
+    // For rate limit errors, provide a more helpful message
+    if (error.message && error.message.toLowerCase().includes('rate limit')) {
+      throw new Error('Facebook API rate limit exceeded. Please try again later.');
+    }
+    
+    throw error;
   }
+}
+
 
   /**
    * Schedule automatic updates
@@ -167,7 +200,7 @@ class ApiIntegrationService {
    * @param {Function} callback - Callback function after update
    * @returns {boolean} - Success status
    */
-  scheduleUpdates(enabled, callback) {
+  scheduleUpdates(enabled, callback, runNow = false) {
     // Clear any existing timer
     if (this.updateTimer) {
       clearInterval(this.updateTimer);
@@ -181,22 +214,23 @@ class ApiIntegrationService {
       console.log('Scheduling updates every 24 hours');
       
       // Run immediately once
-      this.runAnalysisScript()
-        .then(result => {
-          if (callback && typeof callback === 'function') {
-            callback(result);
-          }
-        })
-        .catch(error => {
-          console.error('Error in initial scheduled update:', error);
-          if (callback && typeof callback === 'function') {
-            callback({
-              status: 'error',
-              message: `Error in scheduled update: ${error.message}`
-            });
-          }
-        });
-      
+      if (runNow) {
+        this.runAnalysisScript()
+          .then(result => {
+            if (callback && typeof callback === 'function') {
+              callback(result);
+            }
+          })
+          .catch(error => {
+            console.error('Error in initial scheduled update:', error);
+            if (callback && typeof callback === 'function') {
+              callback({
+                status: 'error',
+                message: `Error in scheduled update: ${error.message}`
+              });
+            }
+          });
+        }
       // Run every 24 hours
       this.updateTimer = setInterval(async () => {
         try {

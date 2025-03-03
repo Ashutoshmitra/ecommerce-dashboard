@@ -12,7 +12,7 @@ COPY backend/ ./backend/
 COPY backend/script_runner.py .
 COPY backend/enhanced_ecommerce_script.py .
 COPY backend/server.py .
-COPY backend/complete_ecommerce_analysis_20250228_230437.csv .
+# COPY backend/complete_ecommerce_analysis_20250228_230437.csv .
 
 # Build the frontend
 COPY frontend/ ./frontend/

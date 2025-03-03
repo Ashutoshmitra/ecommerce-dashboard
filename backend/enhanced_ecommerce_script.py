@@ -32,7 +32,7 @@ EXTENDED_ANALYSIS_DAYS = 30  # Days to look beyond attribution window
 
 # Shopify Base URL
 SHOPIFY_URL = f"https://{SHOPIFY_API_KEY}:{SHOPIFY_PASSWORD}@{SHOPIFY_SHOP_NAME}.myshopify.com/admin/api/2023-10"
-
+USD_TO_EUR_RATE = 0.96
 #############################################
 # SHOPIFY API FUNCTIONS
 #############################################
@@ -638,23 +638,25 @@ def extract_collection_code(campaign_name):
 def extract_campaign_date(campaign_name):
     """Extract campaign date from campaign name"""
     # Extract the date at the beginning of the campaign name
-    # Examples: "15 FEBRUARY- C22 ADS Collection" or "24 FEBRUARY -Urban Corduroy"
     date_match = re.search(r'^(\d+)\s+([A-Za-z]+)', campaign_name)
     
     if date_match:
         day = date_match.group(1)
         month = date_match.group(2)
         try:
-            # Parse date string like "15 FEBRUARY"
+            # First try current year
             current_year = datetime.now().year
             campaign_date = datetime.strptime(f"{day} {month} {current_year}", "%d %B %Y")
+            
+            # If the date is in the future, try previous year
+            if campaign_date > datetime.now():
+                campaign_date = datetime.strptime(f"{day} {month} {current_year-1}", "%d %B %Y")
+                
             return campaign_date
         except ValueError:
-            # If date parsing fails, print debug info
             print(f"Could not parse date from campaign: {campaign_name}")
             print(f"Extracted day: {day}, month: {month}")
     
-    # Fallback to current date if extraction fails
     return None
 
 #############################################
@@ -797,7 +799,8 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
             continue
         
         # Get advertising spend
-        spend = float(campaign_data['spend']) if 'spend' in campaign_data else 0
+        spend_usd = float(campaign_data['spend']) if 'spend' in campaign_data else 0
+        spend = spend_usd * USD_TO_EUR_RATE  # Convert USD to EUR
         
         # Initialize metrics
         product_url = None

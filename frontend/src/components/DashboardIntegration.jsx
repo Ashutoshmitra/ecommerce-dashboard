@@ -14,11 +14,9 @@ const DashboardIntegration = () => {
   useEffect(() => {
     setInitializing(false);
     
-    // Load scheduled update setting
-    const scheduledUpdates = localStorage.getItem('scheduled_updates') === 'true';
-    if (scheduledUpdates) {
-      apiService.scheduleUpdates(true, handleScheduledUpdate);
-    }
+    // Always enable scheduled updates by default
+    const scheduledUpdates = localStorage.getItem('scheduled_updates') !== 'true';
+    apiService.scheduleUpdates(true, handleScheduledUpdate);
   }, [apiService]);
   
   // Handle scheduled update callback
@@ -27,7 +25,9 @@ const DashboardIntegration = () => {
       time: new Date(),
       success: result.status === 'success',
       message: result.message,
-      filePath: result.output_file
+      filePath: result.output_file,
+      stdout: result.stdout,
+      stderr: result.stderr
     });
   };
   
@@ -60,7 +60,9 @@ const DashboardIntegration = () => {
         time: new Date(),
         success: result.status === 'success',
         message: result.message,
-        filePath: result.output_file
+        filePath: result.output_file,
+        stdout: result.stdout,
+        stderr: result.stderr
       });
       
       return result;

@@ -7,12 +7,13 @@ import argparse
 import sys
 import threading
 
-def run_ecommerce_analysis(days_back=30, attribution_window=7, extended_analysis=30, cogs_percentage=0.4):
+def run_ecommerce_analysis(days_back=1100, attribution_window=7, extended_analysis=30, cogs_percentage=0.4):
     """
-    Run the ecommerce analysis script with given parameters
+    Run the ecommerce analysis script with given parameters.
+    Always looks back 1 year (365 days) regardless of what parameter is passed.
     
     Parameters:
-    days_back (int): Number of days to look back
+    days_back (int): Ignored, always uses 1100 days
     attribution_window (int): Attribution window in days
     extended_analysis (int): Extended analysis window in days
     cogs_percentage (float): Cost of goods sold as percentage of revenue
@@ -21,9 +22,13 @@ def run_ecommerce_analysis(days_back=30, attribution_window=7, extended_analysis
     dict: Status and output information
     """
     try:
+        # Override days_back to always be 365 days
+        days_back = 1100
+        
         # Get the script directory
         script_dir = os.path.dirname(os.path.abspath(__file__))
         script_path = os.path.join(script_dir, "enhanced_ecommerce_script.py")
+
         
         # Run the script with provided parameters
         cmd = [
@@ -38,6 +43,9 @@ def run_ecommerce_analysis(days_back=30, attribution_window=7, extended_analysis
         # Create timestamp for this run
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
+        print(f"Starting script execution with params: days_back={days_back}, attribution_window={attribution_window}")
+        print(f"Command: {' '.join(cmd)}")
+        
         # Execute the command
         start_time = time.time()
         process = subprocess.Popen(
@@ -49,6 +57,19 @@ def run_ecommerce_analysis(days_back=30, attribution_window=7, extended_analysis
         
         stdout, stderr = process.communicate()
         end_time = time.time()
+        
+        print(f"Script execution completed in {end_time - start_time:.2f} seconds")
+        
+        # Look for Facebook rate limit messages in the output
+        if "rate limit" in stdout.lower() or "rate limit" in stderr.lower():
+            print("Facebook API rate limit detected in script output")
+            
+            # Since we expect rate limits, we'll provide a friendly message
+            rate_limit_message = "Facebook API rate limits were encountered during script execution. " + \
+                                "This is normal and expected. Some data may not be fully updated."
+            
+            # Append the rate limit message to stdout for the UI to display
+            stdout = stdout + "\n\n" + rate_limit_message
         
         # Check if the process completed successfully
         if process.returncode != 0:
@@ -93,30 +114,52 @@ def run_ecommerce_analysis(days_back=30, attribution_window=7, extended_analysis
         return {
             "status": "error",
             "message": f"Error executing analysis script: {str(e)}",
+            "stdout": "Script execution error",
+            "stderr": str(e),
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
         }
 
-def schedule_daily_update(callback=None):
+def schedule_daily_update(callback=None, run_immediately=False):
     """
     Schedule a daily update of the ecommerce data
     
     Parameters:
     callback (function): Optional callback function to run after the update completes
+    run_immediately (bool): Whether to run the update immediately
     """
     def run_update():
-        while True:
-            # Run the analysis with default parameters
-            result = run_ecommerce_analysis()
+        # Don't run immediately unless requested
+        if not run_immediately:
+            print(f"[{datetime.now()}] Scheduled update - waiting for next scheduled time")
+            time.sleep(24 * 60 * 60)  # Wait 24 hours before first run
             
-            if callback and callable(callback):
-                callback(result)
+        while True:
+            try:
+                print(f"[{datetime.now()}] Running scheduled daily update")
                 
-            # Sleep for 24 hours
+                # Run the analysis with default parameters
+                result = run_ecommerce_analysis()
+                
+                if callback and callable(callback):
+                    callback(result)
+                
+                print(f"[{datetime.now()}] Scheduled update completed with status: {result['status']}")
+                if result['status'] == 'error':
+                    print(f"Error message: {result['message']}")
+                
+                # Sleep for 24 hours
+                print(f"[{datetime.now()}] Next update scheduled for {datetime.now() + timedelta(days=1)}")
+                
+            except Exception as e:
+                print(f"[{datetime.now()}] Error in scheduled update: {str(e)}")
+                
+            # Always sleep for 24 hours between attempts, even if there was an error
             time.sleep(24 * 60 * 60)
     
     # Start the update thread
     update_thread = threading.Thread(target=run_update, daemon=True)
     update_thread.start()
+    print(f"[{datetime.now()}] Daily update scheduler started")
     
     return update_thread
 

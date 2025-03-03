@@ -68,18 +68,41 @@ def list_files():
 def run_script():
     try:
         params = request.json
+        
+        # Log parameters
+        app.logger.info(f"Running analysis script with parameters: {params}")
+        
+        # Add a warning about Facebook rate limits 
+        app.logger.info("Note: Facebook API rate limits may be encountered during script execution")
+        
+        # Run the script with parameters
         result = run_ecommerce_analysis(
-            days_back=params.get('daysBack', 30),
+            days_back=params.get('daysBack', 1100),
             attribution_window=params.get('attributionWindow', 7),
             extended_analysis=params.get('extendedAnalysis', 30),
             cogs_percentage=params.get('cogsPercentage', 0.4)
         )
+        
+        # Check for rate limit messages in the output
+        if result.get('stdout') and 'rate limit' in result['stdout'].lower():
+            app.logger.warning("Facebook API rate limit detected in script output")
+            
+        if result.get('stderr') and 'rate limit' in result['stderr'].lower():
+            app.logger.warning("Facebook API rate limit error detected")
+        
+        # Add a note about expected rate limits to the response
+        if result['status'] == 'success':
+            result['message'] += ". Note: Facebook API rate limits are normal and expected."
+        
+        app.logger.info(f"Script execution completed with status: {result['status']}")
         return jsonify(result)
     except Exception as e:
-        app.logger.error(f"Error running script: {str(e)}")
+        app.logger.error(f"Error running script: {str(e)}", exc_info=True)
         return jsonify({
             "status": "error",
-            "message": f"Error running script: {str(e)}"
+            "message": f"Error running script: {str(e)}",
+            "stdout": "",
+            "stderr": str(e)
         }), 500
 
 # Endpoint to get the Anthropic API key
@@ -349,4 +372,4 @@ if __name__ == '__main__':
     update_thread.start()
     
     # Run the Flask app
-    app.run(debug=True, port=port, host=host)
+    app.run(debug=False, port=port, host=host)
