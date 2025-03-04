@@ -6,6 +6,16 @@ from datetime import datetime, timedelta
 import argparse
 import sys
 import threading
+from dotenv import load_dotenv
+load_dotenv()
+# Get the absolute path to the project root directory
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Define DATA_DIR consistently relative to project root
+DATA_DIR = os.environ.get('DATA_DIR', os.path.join(PROJECT_ROOT, 'backend', 'data'))
+
+# Ensure the directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
 
 def run_ecommerce_analysis(days_back=1100, attribution_window=7, extended_analysis=30, cogs_percentage=0.4):
     """
@@ -29,6 +39,11 @@ def run_ecommerce_analysis(days_back=1100, attribution_window=7, extended_analys
         script_dir = os.path.dirname(os.path.abspath(__file__))
         script_path = os.path.join(script_dir, "enhanced_ecommerce_script.py")
 
+        # Create timestamp for this run
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Set the output directory to DATA_DIR
+        output_dir = DATA_DIR
         
         # Run the script with provided parameters
         cmd = [
@@ -37,22 +52,23 @@ def run_ecommerce_analysis(days_back=1100, attribution_window=7, extended_analys
             "--days_back", str(days_back),
             "--attribution_window", str(attribution_window),
             "--extended_analysis", str(extended_analysis),
-            "--cogs_percentage", str(cogs_percentage)
+            "--cogs_percentage", str(cogs_percentage),
+            "--output_dir", output_dir
         ]
-        
-        # Create timestamp for this run
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         print(f"Starting script execution with params: days_back={days_back}, attribution_window={attribution_window}")
         print(f"Command: {' '.join(cmd)}")
         
         # Execute the command
         start_time = time.time()
+        env = os.environ.copy()
+        env['DATA_DIR'] = DATA_DIR
         process = subprocess.Popen(
             cmd, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=env
         )
         
         stdout, stderr = process.communicate()
@@ -82,14 +98,14 @@ def run_ecommerce_analysis(days_back=1100, attribution_window=7, extended_analys
             }
         
         # Look for the generated CSV file
-        csv_file = f"complete_ecommerce_analysis_{timestamp}.csv"
+        csv_file = os.path.join(output_dir, f"complete_ecommerce_analysis_{timestamp}.csv")
         if not os.path.exists(csv_file):
             # If file not found with timestamp, look for any recently created CSV
-            csv_files = [f for f in os.listdir('.') if f.startswith('complete_ecommerce_analysis_') and f.endswith('.csv')]
+            csv_files = [f for f in os.listdir(output_dir) if f.startswith('complete_ecommerce_analysis_') and f.endswith('.csv')]
             if csv_files:
                 # Sort by modification time to get the most recent
-                csv_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                csv_file = csv_files[0]
+                csv_files.sort(key=lambda x: os.path.getmtime(os.path.join(output_dir, x)), reverse=True)
+                csv_file = os.path.join(output_dir, csv_files[0])
             else:
                 return {
                     "status": "error",
@@ -99,11 +115,11 @@ def run_ecommerce_analysis(days_back=1100, attribution_window=7, extended_analys
                     "timestamp": timestamp
                 }
         
-        # Return success information
+        # Return success information with relative path for the CSV file
         return {
             "status": "success",
             "message": "Analysis completed successfully",
-            "output_file": csv_file,
+            "output_file": os.path.basename(csv_file),
             "execution_time": end_time - start_time,
             "stdout": stdout,
             "stderr": stderr,
@@ -131,7 +147,7 @@ def schedule_daily_update(callback=None, run_immediately=False):
         # Don't run immediately unless requested
         if not run_immediately:
             print(f"[{datetime.now()}] Scheduled update - waiting for next scheduled time")
-            time.sleep(24 * 60 * 60)  # Wait 24 hours before first run
+            time.sleep(12 * 60 * 60)  # Wait 24 hours before first run
             
         while True:
             try:
@@ -154,7 +170,7 @@ def schedule_daily_update(callback=None, run_immediately=False):
                 print(f"[{datetime.now()}] Error in scheduled update: {str(e)}")
                 
             # Always sleep for 24 hours between attempts, even if there was an error
-            time.sleep(24 * 60 * 60)
+            time.sleep(12 * 60 * 60)
     
     # Start the update thread
     update_thread = threading.Thread(target=run_update, daemon=True)

@@ -31,8 +31,13 @@ const EcommerceDashboard = ({
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
-  const [customDateStart, setCustomDateStart] = useState(null);
-  const [customDateEnd, setCustomDateEnd] = useState(null);
+  const [customDateStart, setCustomDateStart] = useState(() => {
+    // Default to 30 days ago (matching default filterDays)
+    const date = new Date();
+    date.setDate(date.getDate() - 30);
+    return date;
+  });
+  const [customDateEnd, setCustomDateEnd] = useState(new Date());
   const [useCustomDateRange, setUseCustomDateRange] = useState(false);
   // State for script execution logs and loading state
   const [scriptLogs, setScriptLogs] = useState('');
@@ -158,10 +163,44 @@ const EcommerceDashboard = ({
     }
   }, [apiService]);
 
-  // Initial data load
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+// Initial data load
+useEffect(() => {
+  loadData();
+}, [loadData]);
+
+  // Add this useEffect to synchronize the date range with filterDays
+useEffect(() => {
+  // Only update if we're not in custom date mode
+  if (!useCustomDateRange) {
+    const endDate = new Date(); // Today
+    const startDate = new Date();
+    
+    if (filterDays > 0) {
+      // Set start date based on filterDays (7, 30, 60, 90 days)
+      startDate.setDate(startDate.getDate() - filterDays);
+    } else {
+      // If filterDays is 0 (All campaigns), default to 365 days
+      startDate.setDate(startDate.getDate() - 365); 
+    }
+    
+    setCustomDateStart(startDate);
+    setCustomDateEnd(endDate);
+  }
+}, [filterDays, useCustomDateRange]);
+
+useEffect(() => {
+  // When changing tabs, ensure we maintain date filter consistency
+  if (activeTab === 'campaigns' || activeTab === 'overview' || 
+      activeTab === 'products' || activeTab === 'ai-insights') {
+    // Nothing to do here - we now use the same filter UI across all tabs
+    // and they all access the same state variables
+  }
+  
+  // If we switch to settings, make sure the custom date inputs reflect current filter
+  if (activeTab === 'settings' && !useCustomDateRange) {
+    // The existing useEffect that syncs dates with filterDays will handle this
+  }
+}, [activeTab]);
 
 /**
  * Extract a date from a campaign name like "15 FEB - Urban Denim"
@@ -263,9 +302,9 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
   }, [data, filterDays]);
   
   const renderFilterUI = () => (
-    <div className="mb-4 flex items-center space-x-2">
+    <div className="mb-4 flex flex-wrap items-center space-x-2">
       <span className="text-sm text-gray-600 dark:text-gray-400">
-        Filter campaigns by start date:
+        Filter data by:
       </span>
       {useCustomDateRange ? (
         <div className="flex items-center">
@@ -298,18 +337,29 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
       <div className="text-xs text-gray-500 dark:text-gray-400 ml-2">
         {useCustomDateRange ? (
           <>
-            Showing campaigns in custom date range
+            Showing data in custom date range
             ({filteredData().length} of {data.length} campaigns)
           </>
         ) : filterDays > 0 ? (
           <>
-            Showing campaigns since {new Date(Date.now() - filterDays * 86400000).toLocaleDateString()}
+            Showing data since {new Date(Date.now() - filterDays * 86400000).toLocaleDateString()}
             ({filteredData().length} of {data.length} campaigns)
           </>
         ) : (
           <>Showing all {data.length} campaigns</>
         )}
       </div>
+      
+      {/* Add a button to quickly switch to custom date range */}
+      {!useCustomDateRange && (
+        <button
+          className="ml-2 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 flex items-center"
+          onClick={() => setActiveTab('settings')}
+        >
+          <Calendar size={14} className="mr-1" />
+          Custom Range
+        </button>
+      )}
     </div>
   );
   
@@ -765,6 +815,11 @@ const summaryMetrics = useCallback(() => {
     
     return (
       <div className="space-y-6">
+      {/* Add Date Selector at the top */}
+      <div className="mb-4">
+        {renderFilterUI()}
+      </div>
+
         {/* Metrics Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
@@ -1081,6 +1136,10 @@ const summaryMetrics = useCallback(() => {
     
     return (
       <div className="space-y-6">
+        {/* Add Date Selector at the top */}
+        <div className="mb-4">
+          {renderFilterUI()}
+        </div>
         {/* Product Performance Chart */}
         <div 
           className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
@@ -1189,8 +1248,13 @@ const summaryMetrics = useCallback(() => {
   };
   const renderSettingsTab = () => {
   
-    // Handle applying the date range filter
     const applyDateRangeFilter = () => {
+      // Ensure we have valid dates
+      if (!customDateStart || !customDateEnd || isNaN(customDateStart.getTime()) || isNaN(customDateEnd.getTime())) {
+        alert("Please select valid start and end dates");
+        return;
+      }
+      
       // Temporarily disable the normal days filter
       setFilterDays(0);
       
@@ -1267,27 +1331,43 @@ const summaryMetrics = useCallback(() => {
             <div>
               <label className="block mb-2 font-medium">Custom Date Range</label>
               <div className="space-y-3">
-                <div>
-                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Start Date</label>
-                  <input 
-                    type="date" 
-                    className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
-                    value={customDateStart ? customDateStart.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]}
-                    onChange={(e) => setCustomDateStart(new Date(e.target.value))}
-                    style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">End Date</label>
-                  <input 
-                    type="date" 
-                    className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
-                    value={customDateEnd ? customDateEnd.toISOString().split('T')[0] : new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0]}
-                    onChange={(e) => setCustomDateEnd(new Date(e.target.value))}
-                    style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
-                  />
-                </div>
+              <div>
+              <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Start Date</label>
+              <input 
+                type="date" 
+                className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
+                value={customDateStart.toISOString().split('T')[0]}
+                onChange={(e) => {
+                  const date = new Date(e.target.value);
+                  if (!isNaN(date.getTime())) {
+                    setCustomDateStart(date);
+                  }
+                }}
+                style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">End Date</label>
+              <input 
+                type="date" 
+                className="p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 w-full"
+                value={customDateEnd.toISOString().split('T')[0]}
+                onChange={(e) => {
+                  const date = new Date(e.target.value);
+                  if (!isNaN(date.getTime())) {
+                    setCustomDateEnd(date);
+                  }
+                }}
+                style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+              />
+            </div>
+
+            {!useCustomDateRange && (
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Matches current filter: {filterDays === 0 ? "All campaigns" : `Last ${filterDays} days`}
+              </div>
+            )}
                 
                 <button 
                   className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded w-full"
@@ -1414,6 +1494,10 @@ const summaryMetrics = useCallback(() => {
   const renderAIInsightsTab = () => {
     return (
       <div className="space-y-6">
+        {/* Add Date Selector at the top */}
+        <div className="mb-4">
+          {renderFilterUI()}
+        </div>
         <div 
           className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
           style={{ backgroundColor: theme.cardBackground, borderColor: theme.border }}

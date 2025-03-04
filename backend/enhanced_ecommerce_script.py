@@ -663,10 +663,15 @@ def extract_campaign_date(campaign_name):
 # EXPORT AND REPORTING FUNCTIONS
 #############################################
 
-def create_output_files(analysis_results, timestamp=None):
+def create_output_files(analysis_results, timestamp=None, output_dir="."):
     """Create a single consolidated output file with all analysis results"""
     if timestamp is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use DATA_DIR as default if output_dir is not provided or not valid
+    if not output_dir or not os.path.exists(output_dir):
+        output_dir = os.environ.get('DATA_DIR', '.')
+        os.makedirs(output_dir, exist_ok=True)
+
     
     campaign_analysis_df = analysis_results['campaign_analysis']
     
@@ -690,7 +695,8 @@ def create_output_files(analysis_results, timestamp=None):
         if isinstance(combined_df[col].iloc[0], list) if not combined_df.empty else False:
             combined_df[col] = combined_df[col].apply(lambda x: str(x) if isinstance(x, list) else x)
     
-    output_filename = f"complete_ecommerce_analysis_{timestamp}.csv"
+    # Use the specified output directory for the output file
+    output_filename = os.path.join(output_dir, f"complete_ecommerce_analysis_{timestamp}.csv")
     combined_df.to_csv(output_filename)
     
     # Print summary information
@@ -1233,9 +1239,10 @@ def main():
     
     # Create output files
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    create_output_files(analysis_results, timestamp)
+    create_output_files(analysis_results, timestamp, args.output_dir)
     
     print("\nAnalysis completed successfully!")
+
 
 if __name__ == "__main__":
     main()

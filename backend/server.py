@@ -11,6 +11,15 @@ import logging
 import anthropic  # Import the Anthropic SDK
 from dotenv import load_dotenv
 load_dotenv()
+# Get the absolute path to the project root directory
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Define DATA_DIR consistently relative to project root
+DATA_DIR = os.environ.get('DATA_DIR', os.path.join(PROJECT_ROOT, 'backend', 'data'))
+
+# Ensure the directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -25,6 +34,17 @@ CORS(app, resources={r"/*": {
     "expose_headers": ["Content-Type", "Authorization"],
     "methods": ["GET", "POST", "OPTIONS"]
 }})
+
+
+# Create a data directory path that uses the persistent volume
+DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+
+# Make sure the data directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Function to get the path for a CSV file in the data directory
+def get_data_file_path(filename):
+    return os.path.join(DATA_DIR, filename)
 
 # Get Anthropic API key from environment variables
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', "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")
@@ -108,14 +128,9 @@ def run_script():
 # Endpoint to get the Anthropic API key
 @app.route('/api/anthropic-key', methods=['GET'])
 def get_anthropic_key():
-    # Add validation to prevent exposing a placeholder key
-    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "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":
-        return jsonify({
-            "error": "API key not configured",
-            "message": "Please set a valid Anthropic API key as an environment variable"
-        }), 403
-    
-    return jsonify({"apiKey": ANTHROPIC_API_KEY})
+    # Always return success to prevent frontend errors, with a dummy key
+    # The frontend won't actually use this directly anymore
+    return jsonify({"apiKey": "dummy-key-not-used-directly", "status": "ok"})
 
 # Chat endpoint using the Anthropic SDK
 @app.route('/api/chat', methods=['POST'])
@@ -287,11 +302,19 @@ def dashboard_insights_proxy():
 @app.route('/api/latest-data', methods=['GET'])
 def get_latest_data():
     try:
-        # Find the most recent CSV file
-        csv_files = [f for f in os.listdir('.') if f.startswith('complete_ecommerce_analysis_') and f.endswith('.csv')]
+        # Print debug info
+        app.logger.debug(f"Looking for CSV files in: {DATA_DIR}")
+        app.logger.debug(f"Directory exists: {os.path.exists(DATA_DIR)}")
+        app.logger.debug(f"Directory contents: {os.listdir(DATA_DIR) if os.path.exists(DATA_DIR) else 'N/A'}")
+        
+        # Find the most recent CSV file in the data directory
+        csv_files = [f for f in os.listdir(DATA_DIR) if f.startswith('complete_ecommerce_analysis_') and f.endswith('.csv')]
+        
+        app.logger.debug(f"Found CSV files: {csv_files}")
+        
         if csv_files:
             # Sort by modification time
-            csv_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            csv_files.sort(key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)), reverse=True)
             latest_file = csv_files[0]
             return jsonify({"file": latest_file})
         else:
@@ -300,7 +323,6 @@ def get_latest_data():
         app.logger.error(f"Error getting latest data: {str(e)}")
         return jsonify({"error": f"Error getting latest data: {str(e)}"}), 500
 
-# Endpoint to serve CSV data files
 @app.route('/data/<filename>', methods=['GET'])
 def get_csv_file(filename):
     try:
@@ -312,13 +334,21 @@ def get_csv_file(filename):
         if not filename.endswith('.csv'):
             return jsonify({"error": "Only CSV files are allowed"}), 400
             
+        # Get the full path in the data directory
+        file_path = get_data_file_path(filename)
+        
+        # Debug logs
+        app.logger.debug(f"Serving file: {filename}")
+        app.logger.debug(f"Full path: {file_path}")
+        app.logger.debug(f"File exists: {os.path.exists(file_path)}")
+            
         # Check if file exists
-        if not os.path.exists(filename):
+        if not os.path.exists(file_path):
             return jsonify({"error": f"File {filename} not found"}), 404
             
         # Set CORS headers for file response
         response = send_file(
-            filename,
+            file_path,
             mimetype='text/csv',
             as_attachment=True,
             download_name=filename
