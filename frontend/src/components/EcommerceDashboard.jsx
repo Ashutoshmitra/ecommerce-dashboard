@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from 'recharts';
 import Papa from 'papaparse';
 import _ from 'lodash';
-import { Sun, Moon, Download, RefreshCw, Calendar, Filter, HelpCircle, Home, BarChart2, PieChart as PieChartIcon, Activity, DollarSign, TrendingUp, Award, Zap, Settings, Inbox } from 'lucide-react';
+import { Sun, Moon, Download, RefreshCw, Calendar, Filter, HelpCircle, Home, BarChart2, PieChart as PieChartIcon, Activity, DollarSign, TrendingUp, Award, Zap, Settings, AlertTriangle } from 'lucide-react';
 
 // Main Dashboard Component
 const EcommerceDashboard = ({ 
@@ -559,22 +559,37 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
 
 // Calculate summary metrics
 const summaryMetrics = useCallback(() => {
-    if (!data.length) return {};
-    
-    const filtered = filteredData();
-    
-    return {
-      totalCampaigns: filtered.length,
-      totalSpend: filtered.reduce((sum, row) => sum + (row['Ad Spend'] || 0), 0),
-      totalRevenue: filtered.reduce((sum, row) => sum + (row['Total Revenue'] || 0), 0),
-      totalProfit: filtered.reduce((sum, row) => sum + (row['Total Net Profit'] || 0), 0),
-      avgROAS: filtered.reduce((sum, row) => sum + (row['Total ROAS'] || 0), 0) / filtered.length,
-      profitableCampaigns: filtered.filter(row => row['Total Net Profit'] > 0).length,
-      totalClicks: filtered.reduce((sum, row) => sum + (row['Clicks'] || 0), 0),
-      totalImpressions: filtered.reduce((sum, row) => sum + (row['Impressions'] || 0), 0),
-      totalOrders: filtered.reduce((sum, row) => sum + (row['Total Orders'] || 0), 0),
-    };
-  }, [data, filteredData]);
+  if (!data.length) return {};
+  
+  const filtered = filteredData();
+  
+  // Extract refund metrics from the summary data (if available)
+  // Look for refund metrics from the first data item (they're global metrics)
+  const firstRow = data[0] || {};
+  // These names should match what's in the CSV output from your backend
+  const refundMetrics = {
+    totalRefunds: firstRow['Total Refunds'] || 0,
+    totalRefundValue: firstRow['Total Refund Value'] || 0,
+    refundRate: firstRow['Refund Rate'] || 0,
+    totalDisputes: firstRow['Total Disputes'] || 0,
+    disputeRate: firstRow['Dispute Rate'] || 0,
+    topRefundReasons: firstRow['Top Refund Reasons'] || '[]'
+  };
+  
+  return {
+    totalCampaigns: filtered.length,
+    totalSpend: filtered.reduce((sum, row) => sum + (row['Ad Spend'] || 0), 0),
+    totalRevenue: filtered.reduce((sum, row) => sum + (row['Total Revenue'] || 0), 0),
+    totalProfit: filtered.reduce((sum, row) => sum + (row['Total Net Profit'] || 0), 0),
+    avgROAS: filtered.reduce((sum, row) => sum + (row['Total ROAS'] || 0), 0) / filtered.length,
+    profitableCampaigns: filtered.filter(row => row['Total Net Profit'] > 0).length,
+    totalClicks: filtered.reduce((sum, row) => sum + (row['Clicks'] || 0), 0),
+    totalImpressions: filtered.reduce((sum, row) => sum + (row['Impressions'] || 0), 0),
+    totalOrders: filtered.reduce((sum, row) => sum + (row['Total Orders'] || 0), 0),
+    // Add refund metrics
+    ...refundMetrics
+  };
+}, [data, filteredData]);
 
   // Get top performing campaigns
   const topCampaigns = useCallback(() => {
@@ -875,6 +890,163 @@ const summaryMetrics = useCallback(() => {
             </div>
           ))}
 
+</div>
+{/* Refund Metrics Cards */}
+<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+  {/* Refund Rate Card */}
+  <div 
+    className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 transform transition duration-300 hover:scale-105"
+    style={{ 
+      backgroundColor: theme.cardBackground, 
+      borderColor: theme.border,
+      animationName: 'fadeInUp',
+      animationDuration: '0.5s',
+      animationFillMode: 'both',
+    }}
+  >
+    <div className="flex justify-between items-start">
+      <div>
+        <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Refund Rate</p>
+        <h3 className="text-2xl font-bold mt-1" style={{ 
+          color: (metrics.refundRate || 0) > 5 ? theme.negative : theme.positive 
+        }}>
+          {(metrics.refundRate || 0).toFixed(2)}%
+        </h3>
+      </div>
+      <div 
+        className="p-2 rounded-full"
+        style={{ backgroundColor: `${(metrics.refundRate || 0) > 5 ? theme.negative : theme.positive}20` }}
+      >
+        <RefreshCw size={20} style={{ color: (metrics.refundRate || 0) > 5 ? theme.negative : theme.positive }} />
+      </div>
+    </div>
+    <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
+      {metrics.totalRefunds || 0} refunds / {metrics.totalOrders || 0} orders
+    </p>
+    <p className="text-xs text-gray-500 italic mt-1">
+    * Refund metrics represent store-wide data and are not affected by date filters
+    </p>
+  </div>
+
+  {/* Total Refunds Card */}
+  <div 
+    className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 transform transition duration-300 hover:scale-105"
+    style={{ 
+      backgroundColor: theme.cardBackground, 
+      borderColor: theme.border,
+      animationName: 'fadeInUp',
+      animationDuration: '0.5s',
+      animationFillMode: 'both',
+    }}
+  >
+    <div className="flex justify-between items-start">
+      <div>
+        <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Total Refunds</p>
+        <h3 className="text-2xl font-bold mt-1">{metrics.totalRefunds || 0}</h3>
+        <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
+          Value: €{(metrics.totalRefundValue || 0).toFixed(2)}
+        </p>
+      </div>
+      <div 
+        className="p-2 rounded-full"
+        style={{ backgroundColor: `${theme.primary}20` }}
+      >
+        <div style={{ color: theme.primary }}>
+          <RefreshCw size={20} />
+        </div>
+      </div>
+    </div>
+    <p className="text-xs text-gray-500 italic mt-1">
+    * Refund metrics represent store-wide data and are not affected by date filters
+    </p>
+  </div>
+
+  {/* Dispute Rate Card */}
+  <div 
+    className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 transform transition duration-300 hover:scale-105"
+    style={{ 
+      backgroundColor: theme.cardBackground, 
+      borderColor: theme.border,
+      animationName: 'fadeInUp',
+      animationDuration: '0.5s',
+      animationFillMode: 'both',
+    }}
+  >
+    <div className="flex justify-between items-start">
+      <div>
+        <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Dispute Rate</p>
+        <h3 className="text-2xl font-bold mt-1" style={{ 
+          color: (metrics.disputeRate || 0) > 1 ? theme.negative : theme.positive 
+        }}>
+          {(metrics.disputeRate || 0).toFixed(2)}%
+        </h3>
+      </div>
+      <div 
+        className="p-2 rounded-full"
+        style={{ backgroundColor: `${(metrics.disputeRate || 0) > 1 ? theme.negative : theme.positive}20` }}
+      >
+        <AlertTriangle size={20} style={{ color: (metrics.disputeRate || 0) > 1 ? theme.negative : theme.positive }} />
+      </div>
+    </div>
+    <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
+      {metrics.totalDisputes || 0} disputes / {metrics.totalOrders || 0} orders
+    </p>
+    <p className="text-xs text-gray-500 italic mt-1">
+    * Refund metrics represent store-wide data and are not affected by date filters
+    </p>
+  </div>
+  <div 
+    className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 transform transition duration-300 hover:scale-105 col-span-3"
+    style={{ 
+      backgroundColor: theme.cardBackground, 
+      borderColor: theme.border,
+      animationName: 'fadeInUp',
+      animationDuration: '0.5s',
+      animationFillMode: 'both',
+    }}
+  >
+    <div className="flex justify-between items-start mb-3">
+      <div>
+        <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Top Refund Reasons</p>
+      </div>
+      <div 
+        className="p-2 rounded-full"
+        style={{ backgroundColor: `${theme.accent}20` }}
+      >
+        <div style={{ color: theme.accent }}>
+          <HelpCircle size={20} />
+        </div>
+      </div>
+    </div>
+    
+    {/* Render the top refund reasons */}
+    <div className="grid grid-cols-1 gap-2">
+      {(() => {
+        try {
+          // The reasons are stored as a JSON string in the first row
+          const reasonsStr = data[0]?.['Top Refund Reasons'];
+          if (!reasonsStr) return <p className="text-sm text-gray-500">No refund reason data available</p>;
+          
+          const reasons = JSON.parse(reasonsStr);
+          if (!reasons.length) return <p className="text-sm text-gray-500">No refund reasons found</p>;
+          
+          return (
+            <div className="space-y-2">
+              {reasons.map(([reason, count], index) => (
+                <div key={index} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-700 rounded">
+                  <span className="text-sm truncate flex-1">{reason}</span>
+                  <span className="text-sm font-medium ml-2 px-2 py-1 bg-gray-200 dark:bg-gray-600 rounded">{count} refunds</span>
+                </div>
+              ))}
+            </div>
+          );
+        } catch (e) {
+          console.error("Error parsing refund reasons:", e);
+          return <p className="text-sm text-gray-500">Error loading refund reasons</p>;
+        }
+      })()}
+    </div>
+  </div>
 </div>
         
         {/* ROAS Distribution and Profitability Charts */}

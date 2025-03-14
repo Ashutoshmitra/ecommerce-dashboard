@@ -408,6 +408,114 @@ def process_orders(orders):
         'order_items': order_items
     }
 
+def get_refunds(start_date, end_date):
+    """Get all refunds from the shop within the specified date range"""
+    # Format dates for the API
+    start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S%z")
+    end_date_str = end_date.strftime("%Y-%m-%dT%H:%M:%S%z")
+    
+    print(f"Fetching refunds from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
+    
+    refunds = []
+    
+    # First get all orders that could have refunds
+    orders = get_orders(start_date, end_date)
+    
+    # Process each order to check for refunds
+    for order in orders:
+        if order.get('refunds'):
+            order_id = order['id']
+            order_number = order['order_number']
+            customer_id = order.get('customer', {}).get('id', '')
+            
+            # Process each refund in the order
+            for refund in order['refunds']:
+                # Calculate total refund amount from transactions
+                refund_amount = 0
+                if refund.get('transactions'):
+                    for transaction in refund['transactions']:
+                        if transaction.get('kind') == 'refund':
+                            refund_amount += float(transaction.get('amount', 0))
+                
+                # Get reason if available
+                reason = refund.get('note', '') or ''
+
+                
+                # Check if it's a chargeback/dispute
+                is_dispute = False
+                processing_method = refund.get('processing_method', '').lower()
+                if (processing_method == 'chargeback' or 
+                    'dispute' in reason.lower() or 
+                    'chargeback' in reason.lower() or
+                    'fraud' in reason.lower() or
+                    'unauthorized' in reason.lower()):
+                    is_dispute = True
+
+                # You could also check the order's financial_status
+                if order.get('financial_status') == 'charged_back':
+                    is_dispute = True
+                
+                # Get refund line items
+                refund_line_items_count = len(refund.get('refund_line_items', []))
+                
+                # Create refund record
+                refund_data = {
+                    'refund_id': refund['id'],
+                    'order_id': order_id,
+                    'order_number': order_number,
+                    'customer_id': customer_id,
+                    'created_at': refund['created_at'],
+                    'processed_at': refund.get('processed_at', refund['created_at']),
+                    'amount': refund_amount,
+                    'reason': reason,
+                    'is_dispute': is_dispute,
+                    'refund_line_items_count': refund_line_items_count,
+                    'currency': order['currency']
+                }
+                
+                refunds.append(refund_data)
+    
+    print(f"Fetched {len(refunds)} refunds")
+    return refunds
+
+def analyze_refund_data(refunds, orders):
+    """Analyze refund data and calculate refund metrics"""
+    # Initialize metrics
+    total_orders = len(orders)
+    total_order_value = sum(float(order['total_price']) for order in orders)
+    total_refunds = len(refunds)
+    total_refund_value = sum(refund['amount'] for refund in refunds)
+    total_disputes = sum(1 for refund in refunds if refund['is_dispute'])
+    dispute_value = sum(refund['amount'] for refund in refunds if refund['is_dispute'])
+    
+    # Calculate rates
+    refund_rate = (total_refunds / total_orders * 100) if total_orders > 0 else 0
+    dispute_rate = (total_disputes / total_orders * 100) if total_orders > 0 else 0
+    refund_value_percentage = (total_refund_value / total_order_value * 100) if total_order_value > 0 else 0
+    
+    # Group refunds by reason
+    reason_counts = {}
+    for refund in refunds:
+        reason = refund['reason'] if refund['reason'] else 'No reason provided'
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    
+    # Sort reasons by frequency
+    top_reasons = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # Return refund analysis results
+    refund_analysis = {
+        'total_refunds': total_refunds,
+        'total_refund_value': total_refund_value,
+        'refund_rate': refund_rate,
+        'total_disputes': total_disputes,
+        'dispute_value': dispute_value,
+        'dispute_rate': dispute_rate,
+        'refund_value_percentage': refund_value_percentage,
+        'top_refund_reasons': top_reasons[:5] if top_reasons else []
+    }
+    
+    return refund_analysis
+
 def get_shopify_data(start_date, end_date):
     """Get all Shopify data for the specified date range"""
     # Get collection-product mapping
@@ -419,11 +527,20 @@ def get_shopify_data(start_date, end_date):
     orders = get_orders(start_date, end_date)
     financial_data = process_orders(orders)
     
+    # Get refunds data
+    print(f"\n=== FETCHING REFUNDS ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}) ===")
+    refunds = get_refunds(start_date, end_date)
+    
+    # Analyze refund data
+    refund_analysis = analyze_refund_data(refunds, orders)
+    
     # Return all data
     return {
         'collection_product_mapping': collection_product_mapping,
         'order_summary': financial_data['order_summary'],
-        'order_items': financial_data['order_items']
+        'order_items': financial_data['order_items'],
+        'refunds': refunds,
+        'refund_analysis': refund_analysis
     }
 
 #############################################
@@ -685,7 +802,20 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
     # Filter out individual product entries (those with __PRODUCT_ in the index)
     # This will keep only the original campaign-level entries for the CSV export
     combined_df = combined_df[~combined_df.index.str.contains('__PRODUCT_', na=False)]
-    
+    # Add refund metrics to the first row of the DataFrame
+    if not combined_df.empty and 'refund_analysis' in analysis_results:
+        refund_analysis = analysis_results.get('refund_analysis', {})
+        # Add refund metrics to the first row
+        combined_df.loc[combined_df.index[0], 'Total Refunds'] = refund_analysis.get('total_refunds', 0)
+        combined_df.loc[combined_df.index[0], 'Total Refund Value'] = refund_analysis.get('total_refund_value', 0)
+        combined_df.loc[combined_df.index[0], 'Refund Rate'] = refund_analysis.get('refund_rate', 0)
+        combined_df.loc[combined_df.index[0], 'Total Disputes'] = refund_analysis.get('total_disputes', 0)
+        combined_df.loc[combined_df.index[0], 'Dispute Rate'] = refund_analysis.get('dispute_rate', 0)
+        
+        # Convert the top refund reasons to a JSON string and add to the CSV
+        top_reasons = refund_analysis.get('top_refund_reasons', [])
+        combined_df.loc[combined_df.index[0], 'Top Refund Reasons'] = json.dumps(top_reasons)
+
     # Drop complex columns that can't be easily represented in CSV
     if 'Daily Sales' in combined_df.columns:
         combined_df = combined_df.drop('Daily Sales', axis=1)
@@ -731,6 +861,24 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
             if campaign and campaign in campaign_analysis_df.index:
                 campaign_info = campaign_analysis_df.loc[campaign]
                 print(f"{label}: {campaign} - Product: {campaign_info['Product Name']}")
+
+    # Add refund metrics to the console output
+    print("\nRefund Analysis")
+    print("=" * 50)
+    refund_analysis = analysis_results.get('refund_analysis', {})
+    if refund_analysis:
+        print(f"Total Refunds: {refund_analysis.get('total_refunds', 0)}")
+        print(f"Total Refund Value: €{refund_analysis.get('total_refund_value', 0):.2f}")
+        print(f"Refund Rate: {refund_analysis.get('refund_rate', 0):.2f}%")
+        print(f"Total Disputes: {refund_analysis.get('total_disputes', 0)}")
+        print(f"Dispute Rate: {refund_analysis.get('dispute_rate', 0):.2f}%")
+        print(f"Refund Value as % of Total Revenue: {refund_analysis.get('refund_value_percentage', 0):.2f}%")
+        
+        # Print top refund reasons
+        print("\nTop Refund Reasons:")
+        for reason, count in refund_analysis.get('top_refund_reasons', []):
+            print(f"- {reason}: {count} refunds")
+
 
     print(f"\nResults saved to: {output_filename}")
     
@@ -823,7 +971,10 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
     facebook_metrics = facebook_data['metrics']
     collection_map_df = pd.DataFrame(shopify_data['collection_product_mapping'])
     order_items_df = pd.DataFrame(shopify_data['order_items'])
-    
+
+    # Add refund data to the analysis
+    refund_analysis = shopify_data.get('refund_analysis', {})
+
     # Convert dates to datetime format
     order_items_df['created_at'] = pd.to_datetime(order_items_df['created_at'], utc=True)
     
@@ -1226,12 +1377,21 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
         'Average Extended Window (%)': campaign_analysis_df['Extended Window Revenue (%)'].mean() if not campaign_analysis_df.empty else 0,
         'Average CPA': campaign_analysis_df['CPA'].mean() if not campaign_analysis_df.empty else 0,
         'Average Profit Margin (%)': campaign_analysis_df['Profit Margin (%)'].mean() if not campaign_analysis_df.empty else 0,
-        'Top Performing Ads': top_ads
+        'Top Performing Ads': top_ads,
+        # Add refund metrics
+        'Total Refunds': refund_analysis.get('total_refunds', 0),
+        'Total Refund Value': refund_analysis.get('total_refund_value', 0),
+        'Refund Rate': refund_analysis.get('refund_rate', 0),
+        'Total Disputes': refund_analysis.get('total_disputes', 0),
+        'Dispute Rate': refund_analysis.get('dispute_rate', 0),
+        'Refund Value Percentage': refund_analysis.get('refund_value_percentage', 0),
+        'Top Refund Reasons': refund_analysis.get('top_refund_reasons', [])
     }
     
     return {
         'campaign_analysis': campaign_analysis_df,
-        'summary': summary
+        'summary': summary,
+        'refund_analysis': refund_analysis
     }
 
 #############################################
