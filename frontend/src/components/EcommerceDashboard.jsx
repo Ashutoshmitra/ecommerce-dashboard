@@ -31,6 +31,8 @@ const EcommerceDashboard = ({
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [productSortField, setProductSortField] = useState('revenue');
+  const [productSortDirection, setProductSortDirection] = useState('desc');
   const [customDateStart, setCustomDateStart] = useState(() => {
     // Default to 30 days ago (matching default filterDays)
     const date = new Date();
@@ -296,9 +298,18 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
     // Filter data based on option selected (last 7 days, 30 days, etc.)
     const filtered = filterDataByDays(data, filterDays);
     
-    console.log(`Filtered data: ${filtered.length}/${data.length} campaigns shown for last ${filterDays} days`);
-    
-    return filtered;
+    // Sort filtered data by campaign date in descending order (most recent first)
+    return filtered.sort((a, b) => {
+      // First try to extract date from 'Campaign Start' field
+      let dateA = a['Campaign Start'] ? new Date(a['Campaign Start']) : extractDateFromCampaignName(a.campaignName || a[''] || '');
+      let dateB = b['Campaign Start'] ? new Date(b['Campaign Start']) : extractDateFromCampaignName(b.campaignName || b[''] || '');
+      
+      // If both dates are invalid, keep original order
+      if (!dateA || !dateB) return 0;
+      
+      // Sort in descending order (most recent first)
+      return dateB.getTime() - dateA.getTime();
+    });
   }, [data, filterDays]);
   
   const renderFilterUI = () => (
@@ -662,7 +673,9 @@ const summaryMetrics = useCallback(() => {
         name: product || 'Unknown',
         revenue: _.sumBy(campaigns, 'Total Revenue'),
         profit: _.sumBy(campaigns, 'Total Net Profit'),
-        campaigns: campaigns.length
+        orders: _.sumBy(campaigns, 'Total Orders'),
+        campaigns: campaigns.length,
+        margin: (_.sumBy(campaigns, 'Total Net Profit') / _.sumBy(campaigns, 'Total Revenue') * 100) || 0
       }))
       .filter(item => item.revenue > 0)
       .orderBy(['revenue'], ['desc'])
@@ -1304,14 +1317,80 @@ const summaryMetrics = useCallback(() => {
   };
   
   const renderProductsTab = () => {
+    // Get product data and sort it according to the current sort settings
     const productData = prepareRevenueByProduct();
+    // Apply sorting directly (no need for useMemo since this function runs on each render anyway)
+    const sortedProductData = _.orderBy(productData, [productSortField], [productSortDirection]);
     
+    // Function to handle column header clicks for sorting
+    const handleSortClick = (field) => {
+      if (productSortField === field) {
+        // Toggle direction if clicking the same field
+        setProductSortDirection(productSortDirection === 'asc' ? 'desc' : 'asc');
+      } else {
+        // Set new field and default to descending
+        setProductSortField(field);
+        setProductSortDirection('desc');
+      }
+    };
+    
+    // Helper to render sort indicator
+    const renderSortIndicator = (field) => {
+      if (productSortField !== field) return null;
+      return productSortDirection === 'asc' ? '▲' : '▼';
+    };
+  
     return (
       <div className="space-y-6">
         {/* Add Date Selector at the top */}
         <div className="mb-4">
           {renderFilterUI()}
         </div>
+        
+        {/* Sorting options */}
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
+          style={{ backgroundColor: theme.cardBackground, borderColor: theme.border }}>
+          <h3 className="text-lg font-semibold mb-4">Product Sorting Options</h3>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`px-3 py-2 rounded-lg ${productSortField === 'revenue' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}
+              onClick={() => {
+                setProductSortField('revenue');
+                setProductSortDirection('desc');
+              }}
+            >
+              Sort by Highest Revenue
+            </button>
+            <button
+              className={`px-3 py-2 rounded-lg ${productSortField === 'orders' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}
+              onClick={() => {
+                setProductSortField('orders');
+                setProductSortDirection('desc');
+              }}
+            >
+              Sort by Highest Sales Volume
+            </button>
+            <button
+              className={`px-3 py-2 rounded-lg ${productSortField === 'profit' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}
+              onClick={() => {
+                setProductSortField('profit');
+                setProductSortDirection('desc');
+              }}
+            >
+              Sort by Highest Profit
+            </button>
+            <button
+              className={`px-3 py-2 rounded-lg ${productSortField === 'margin' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}
+              onClick={() => {
+                setProductSortField('margin');
+                setProductSortDirection('desc');
+              }}
+            >
+              Sort by Highest Margin
+            </button>
+          </div>
+        </div>
+        
         {/* Product Performance Chart */}
         <div 
           className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
@@ -1321,7 +1400,7 @@ const summaryMetrics = useCallback(() => {
           <div className="h-96">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart 
-                data={productData}
+                data={sortedProductData}
                 margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
@@ -1367,7 +1446,7 @@ const summaryMetrics = useCallback(() => {
           </div>
         </div>
         
-        {/* Product List */}
+        {/* Product List with sortable columns */}
         <div 
           className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
           style={{ backgroundColor: theme.cardBackground, borderColor: theme.border }}
@@ -1378,15 +1457,46 @@ const summaryMetrics = useCallback(() => {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
-                  <th className="py-2 px-4 text-left">Product</th>
-                  <th className="py-2 px-4 text-right">Revenue</th>
-                  <th className="py-2 px-4 text-right">Profit</th>
-                  <th className="py-2 px-4 text-right">Campaigns</th>
-                  <th className="py-2 px-4 text-right">Margin %</th>
+                  <th 
+                    className="py-2 px-4 text-left cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={() => handleSortClick('name')}
+                  >
+                    Product {renderSortIndicator('name')}
+                  </th>
+                  <th 
+                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={() => handleSortClick('revenue')}
+                  >
+                    Revenue {renderSortIndicator('revenue')}
+                  </th>
+                  <th 
+                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={() => handleSortClick('orders')}
+                  >
+                    Sales Volume {renderSortIndicator('orders')}
+                  </th>
+                  <th 
+                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={() => handleSortClick('profit')}
+                  >
+                    Profit {renderSortIndicator('profit')}
+                  </th>
+                  <th 
+                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={() => handleSortClick('campaigns')}
+                  >
+                    Campaigns {renderSortIndicator('campaigns')}
+                  </th>
+                  <th 
+                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={() => handleSortClick('margin')}
+                  >
+                    Margin % {renderSortIndicator('margin')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {productData.map((product, index) => (
+                {sortedProductData.map((product, index) => (
                   <tr 
                     key={index}
                     className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -1398,6 +1508,7 @@ const summaryMetrics = useCallback(() => {
                       </div>
                     </td>
                     <td className="py-2 px-4 text-right">€{product.revenue.toFixed(2)}</td>
+                    <td className="py-2 px-4 text-right">{product.orders}</td>
                     <td className="py-2 px-4 text-right" style={{ 
                       color: product.profit >= 0 ? theme.positive : theme.negative 
                     }}>
@@ -1405,9 +1516,9 @@ const summaryMetrics = useCallback(() => {
                     </td>
                     <td className="py-2 px-4 text-right">{product.campaigns}</td>
                     <td className="py-2 px-4 text-right" style={{ 
-                      color: (product.profit / product.revenue * 100) >= 0 ? theme.positive : theme.negative 
+                      color: product.margin >= 0 ? theme.positive : theme.negative 
                     }}>
-                      {(product.profit / product.revenue * 100).toFixed(2)}%
+                      {product.margin.toFixed(2)}%
                     </td>
                   </tr>
                 ))}
@@ -1418,6 +1529,9 @@ const summaryMetrics = useCallback(() => {
       </div>
     );
   };
+  
+  
+
   const renderSettingsTab = () => {
   
     const applyDateRangeFilter = () => {
