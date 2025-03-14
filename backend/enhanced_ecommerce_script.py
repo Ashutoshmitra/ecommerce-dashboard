@@ -682,6 +682,10 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
     # Create a combined CSV with all relevant data
     combined_df = campaign_analysis_df.copy()
     
+    # Filter out individual product entries (those with __PRODUCT_ in the index)
+    # This will keep only the original campaign-level entries for the CSV export
+    combined_df = combined_df[~combined_df.index.str.contains('__PRODUCT_', na=False)]
+    
     # Drop complex columns that can't be easily represented in CSV
     if 'Daily Sales' in combined_df.columns:
         combined_df = combined_df.drop('Daily Sales', axis=1)
@@ -748,6 +752,70 @@ def identify_top_performing_ads(campaign_analysis_df):
     }
     
     return top_ads
+
+def split_product_lists(campaign_results):
+    """
+    Split product lists into individual product entries with distributed metrics
+    
+    Parameters:
+    campaign_results (dict): Original campaign results with product lists
+    
+    Returns:
+    dict: Expanded campaign results with individual products
+    """
+    expanded_results = {}
+    
+    for campaign, data in campaign_results.items():
+        product_name = data['Product Name']
+        
+        # Check if product_name is a list (multiple products)
+        if isinstance(product_name, list) and len(product_name) > 1:
+            # Calculate metrics to distribute
+            num_products = len(product_name)
+            
+            # For each product, create a new entry
+            for i, product in enumerate(product_name):
+                new_campaign_key = f"{campaign}__PRODUCT_{i+1}"
+                
+                # Copy original data
+                new_data = data.copy()
+                
+                # Replace product name with individual product
+                new_data['Product Name'] = product
+                
+                # Distribute metrics evenly
+                for metric in ['Ad Spend', 'Impressions', 'Clicks', 
+                              'Attribution Revenue', 'Attribution Orders',
+                              'Attribution COGS', 'Attribution Gross Profit', 
+                              'Extended Revenue', 'Extended Orders',
+                              'Total Revenue', 'Total Orders', 'Total COGS', 
+                              'Total Gross Profit', 'Total Net Profit']:
+                    if metric in new_data and new_data[metric] is not None:
+                        new_data[metric] = new_data[metric] / num_products
+                
+                # Recalculate derived metrics
+                new_data['Attribution Net Profit'] = new_data['Attribution Gross Profit'] - new_data['Ad Spend']
+                new_data['Attribution ROI (%)'] = (new_data['Attribution Net Profit'] / new_data['Ad Spend']) * 100 if new_data['Ad Spend'] > 0 else np.nan
+                new_data['Attribution ROAS'] = new_data['Attribution Revenue'] / new_data['Ad Spend'] if new_data['Ad Spend'] > 0 else np.nan
+                new_data['Total ROI (%)'] = (new_data['Total Net Profit'] / new_data['Ad Spend']) * 100 if new_data['Ad Spend'] > 0 else np.nan
+                new_data['Total ROAS'] = new_data['Total Revenue'] / new_data['Ad Spend'] if new_data['Ad Spend'] > 0 else np.nan
+                new_data['CTR (%)'] = (new_data['Clicks'] / new_data['Impressions']) * 100 if new_data['Impressions'] > 0 else 0
+                new_data['Conversion Rate (%)'] = (new_data['Attribution Orders'] / new_data['Clicks']) * 100 if new_data['Clicks'] > 0 else 0
+                new_data['CPA'] = new_data['Ad Spend'] / new_data['Attribution Orders'] if new_data['Attribution Orders'] > 0 else np.nan
+                new_data['Profit Margin (%)'] = (new_data['Attribution Net Profit'] / new_data['Attribution Revenue']) * 100 if new_data['Attribution Revenue'] > 0 else np.nan
+                new_data['Total Profit Margin (%)'] = (new_data['Total Net Profit'] / new_data['Total Revenue']) * 100 if new_data['Total Revenue'] > 0 else np.nan
+                
+                # Add original campaign reference
+                new_data['Original Campaign'] = campaign
+                new_data['Product Count'] = num_products
+                
+                # Store the new entry
+                expanded_results[new_campaign_key] = new_data
+        else:
+            # Single product, keep as is
+            expanded_results[campaign] = data
+    
+    return expanded_results
 
 def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
     """Analyze the campaign data with enriched information"""
@@ -1132,6 +1200,9 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
             'Matched Product IDs': matched_product_ids
         }
     
+    # Split product lists into individual products
+    campaign_results = split_product_lists(campaign_results)
+
     # Convert results to DataFrame
     campaign_analysis_df = pd.DataFrame.from_dict(campaign_results, orient='index')
     
@@ -1236,6 +1307,7 @@ def main():
     # Analyze data
     print("\n=== ANALYZING CAMPAIGN DATA ===")
     analysis_results = analyze_campaign_data(facebook_data, shopify_data, start_date, end_date)
+    print("\nNote: Product lists have been split into individual products with distributed metrics.")
     
     # Create output files
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
