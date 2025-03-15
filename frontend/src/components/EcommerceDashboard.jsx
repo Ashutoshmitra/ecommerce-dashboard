@@ -574,17 +574,16 @@ const summaryMetrics = useCallback(() => {
   
   const filtered = filteredData();
   
-  // Extract refund metrics from the summary data (if available)
-  // Look for refund metrics from the first data item (they're global metrics)
-  const firstRow = data[0] || {};
-  // These names should match what's in the CSV output from your backend
+  // Extract refund metrics from the ORIGINAL data (first row)
+  // This ensures global metrics are always available
+  const firstRowOfOriginalData = data[0] || {};
   const refundMetrics = {
-    totalRefunds: firstRow['Total Refunds'] || 0,
-    totalRefundValue: firstRow['Total Refund Value'] || 0,
-    refundRate: firstRow['Refund Rate'] || 0,
-    totalDisputes: firstRow['Total Disputes'] || 0,
-    disputeRate: firstRow['Dispute Rate'] || 0,
-    topRefundReasons: firstRow['Top Refund Reasons'] || '[]'
+    totalRefunds: firstRowOfOriginalData['Total Refunds'] || 0,
+    totalRefundValue: firstRowOfOriginalData['Total Refund Value'] || 0,
+    refundRate: firstRowOfOriginalData['Refund Rate'] || 0,
+    totalDisputes: firstRowOfOriginalData['Total Disputes'] || 0,
+    disputeRate: firstRowOfOriginalData['Dispute Rate'] || 0,
+    topRefundReasons: firstRowOfOriginalData['Top Refund Reasons'] || '[]'
   };
   
   return {
@@ -597,7 +596,7 @@ const summaryMetrics = useCallback(() => {
     totalClicks: filtered.reduce((sum, row) => sum + (row['Clicks'] || 0), 0),
     totalImpressions: filtered.reduce((sum, row) => sum + (row['Impressions'] || 0), 0),
     totalOrders: filtered.reduce((sum, row) => sum + (row['Total Orders'] || 0), 0),
-    // Add refund metrics
+    // Use the refund metrics from the original first row
     ...refundMetrics
   };
 }, [data, filteredData]);
