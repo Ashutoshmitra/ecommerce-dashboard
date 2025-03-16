@@ -268,7 +268,8 @@ def get_collection_product_mapping():
     """Create a complete mapping between collections and products, including all products regardless of collection"""
     # Get all collections
     collections = get_all_collections()
-    
+    print("DEBUG: Available collection titles:", [c['title'] for c in collections])
+
     # Create a mapping dictionary for collections for quick lookup
     collection_map = {collection['id']: collection for collection in collections}
     
