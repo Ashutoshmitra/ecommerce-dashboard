@@ -749,9 +749,44 @@ def extract_product_name(campaign_name):
     return product_name.strip()
 
 def extract_collection_code(campaign_name):
-    """Extract collection code from campaign name"""
-    match = re.search(r'C(\d+)\s+ADS', campaign_name, re.IGNORECASE)
-    return f"C{match.group(1)}" if match else None
+    """Extract collection code from campaign name with improved pattern matching"""
+    # Try multiple patterns to match collection codes
+    patterns = [
+        r'C(\d+)\s+ADS',                           # Standard pattern: C35 ADS
+        r'C(\d+)\s+ADS\s+Collection',              # Extended pattern: C35 ADS Collection
+        r'C(\d+)\s+Collection',                    # Alternative pattern: C35 Collection
+        r'-\s+C(\d+)\s+ADS',                       # With dash prefix: - C35 ADS
+        r'-\s+C(\d+)',                             # Just with dash prefix: - C35
+        r'Collection\s+\(.*\)\s+-\s+C(\d+)',       # Complex pattern with date
+        r'Collection\s+C(\d+)',                    # Reversed order: Collection C35
+        r'C(\d+)'                                  # Fallback: just C35 anywhere
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, campaign_name, re.IGNORECASE)
+        if match:
+            return f"C{match.group(1)}"
+    
+    # If we're here, check if word "collection" exists at all
+    if "COLLECTION" in campaign_name.upper():
+        # Extract any number following C
+        match = re.search(r'C(\d+)', campaign_name, re.IGNORECASE)
+        if match:
+            return f"C{match.group(1)}"
+            
+    return None
+
+def is_collection_campaign(campaign_name):
+    """Determine if a campaign is for a collection with improved detection"""
+    # Check for explicit collection indicators
+    if "COLLECTION" in campaign_name.upper():
+        return True
+        
+    # Check for collection code pattern
+    if re.search(r'C\d+', campaign_name, re.IGNORECASE):
+        return True
+        
+    return False
 
 def extract_campaign_date(campaign_name):
     """Extract campaign date from campaign name"""
@@ -800,9 +835,9 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
     # Create a combined CSV with all relevant data
     combined_df = campaign_analysis_df.copy()
     
-    # Filter out individual product entries (those with __PRODUCT_ in the index)
-    # This will keep only the original campaign-level entries for the CSV export
-    combined_df = combined_df[~combined_df.index.str.contains('__PRODUCT_', na=False)]
+    # REMOVE THIS LINE - We want to keep all entries including product-level entries
+    # combined_df = combined_df[~combined_df.index.str.contains('__PRODUCT_', na=False)]
+    
     # Add refund metrics to the first row of the DataFrame
     if not combined_df.empty and 'refund_analysis' in analysis_results:
         refund_analysis = analysis_results.get('refund_analysis', {})
@@ -966,6 +1001,40 @@ def split_product_lists(campaign_results):
     
     return expanded_results
 
+def find_matching_collection(collection_code, collection_map_df):
+    """
+    Find a matching collection in Shopify data with improved matching logic
+    that handles date format differences
+    """
+    # First try exact code match
+    exact_matches = collection_map_df[collection_map_df['collection_title'].str.contains(collection_code, case=False, na=False)]
+    
+    if not exact_matches.empty:
+        return exact_matches
+    
+    # Try more flexible pattern matching for just the collection code
+    collection_number = collection_code.replace('C', '')
+    pattern = r'C\s*' + collection_number + r'\b'
+    flexible_matches = collection_map_df[collection_map_df['collection_title'].str.contains(pattern, case=False, regex=True, na=False)]
+    
+    if not flexible_matches.empty:
+        return flexible_matches
+    
+    # If we still don't have matches, look for the numeric part only
+    # This handles cases where C35 in a campaign needs to match with any collection containing "35"
+    numeric_matches = collection_map_df[collection_map_df['collection_title'].str.contains(collection_number, regex=True, na=False)]
+    
+    if not numeric_matches.empty:
+        # Filter to only those that have "ADS Collection" in the name as well
+        ads_collection_matches = numeric_matches[numeric_matches['collection_title'].str.contains("ADS Collection", case=False, na=False)]
+        
+        if not ads_collection_matches.empty:
+            return ads_collection_matches
+        else:
+            return numeric_matches
+            
+    return pd.DataFrame()  # Return empty DataFrame if no match found
+
 def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
     """Analyze the campaign data with enriched information"""
     # Extract relevant data
@@ -1044,17 +1113,16 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
         # Track matched products and their IDs
         matched_product_ids = []
         
-        # Check if it's a collection or single product campaign
-        if "COLLECTION" in campaign:
+        if is_collection_campaign(campaign):
             # Process collection campaign
             collection_code = extract_collection_code(campaign)
             
             if collection_code:
-                matching_collections = collection_map_df[collection_map_df['collection_title'].str.contains(collection_code, na=False)]
+                # Use the improved matching function
+                matching_collections = find_matching_collection(collection_code, collection_map_df)
                 
                 if matching_collections.empty:
                     print(f"Warning: Collection {collection_code} referenced in campaign {campaign} not found in Shopify data")
-                    # Store the campaign name and mark it as having a missing collection
                     product_names = [f"Collection {collection_code} - Not Found in Shopify"]
                     product_url = None  # No URL since collection not found
                 else:
@@ -1065,6 +1133,10 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                     # Get collection URL instead of product URLs
                     collection_url = matching_collections['collection_url'].iloc[0]
                     product_url = collection_url  # Use collection URL for collection campaigns
+                    
+                    # Get matched collection title for better reporting
+                    collection_title = matching_collections['collection_title'].iloc[0]
+                    print(f"Matched campaign {campaign} with collection: {collection_title}")
                     
                     # Get product details (names only, not URLs)
                     for product_id in collection_product_ids:
@@ -1100,6 +1172,11 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                         if not extended_orders.empty:
                             extended_revenue += extended_orders['price'].sum()
                             extended_orders_count += len(extended_orders)
+            else:
+                # Fall back to the campaign name for collections without explicit code
+                print(f"Warning: No collection code found in campaign name: {campaign}")
+                product_names = [f"Collection from {campaign} - No code extracted"]
+                product_url = None
         else:
             # Process single product campaign
             extracted_name = extract_product_name(campaign)
