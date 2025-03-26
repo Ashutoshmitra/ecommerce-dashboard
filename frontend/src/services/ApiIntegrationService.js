@@ -218,38 +218,60 @@ class ApiIntegrationService {
    * @param {Object} context - Chat context with question and data
    * @returns {Promise<Object>} - The AI response
    */
-  async processChat(context) {
-    try {
-      console.log('Processing chat through backend proxy');
+// Find the processChat method (around line 200-240) and replace it with:
+async processChat(context) {
+  try {
+    console.log('Processing chat through backend proxy');
+    
+    const { dashboardData, question } = context;
+    
+    // Compress the data without reducing the number of campaigns
+    let compressedData = { ...dashboardData };
+    
+    // If allCampaigns exists, compress each campaign to essential fields only
+    if (compressedData.allCampaigns && compressedData.allCampaigns.length > 0) {
+      console.log(`Compressing ${compressedData.allCampaigns.length} campaigns`);
       
-      // Make the request to your backend proxy endpoint instead of directly to Anthropic
-      const response = await fetch(`${this.baseUrl}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          question: context.question,
-          dashboardData: context.dashboardData
-        })
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Response error:', errorText);
-        throw new Error(`Chat request failed: ${response.status} ${response.statusText}`);
-      }
-      
-      const result = await response.json();
-      return result;
-    } catch (error) {
-      console.error('Error processing chat:', error);
-      
-      // Fallback for error cases
-      return this.generateSimulatedChatResponse(context);
+      compressedData.allCampaigns = compressedData.allCampaigns.map(campaign => ({
+        name: campaign.name || 'Unknown',
+        product: campaign.product || 'Unknown',
+        adSpend: campaign.adSpend || 0,
+        revenue: campaign.revenue || 0,
+        profit: campaign.profit || 0,
+        roas: campaign.roas || 0,
+        orders: campaign.orders || 0,
+        conversionRate: campaign.conversionRate || 0
+      }));
     }
+    
+    // Make the request to your backend proxy endpoint instead of directly to Anthropic
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        question: question,
+        dashboardData: compressedData
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Response error:', errorText);
+      throw new Error(`Chat request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Error processing chat:', error);
+    
+    // Fallback for error cases
+    return this.generateSimulatedChatResponse(context);
   }
+}
 
   /**
    * Generate campaign insights using AI via backend proxy

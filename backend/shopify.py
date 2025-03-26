@@ -18,7 +18,7 @@ SHOPIFY_SHOP_NAME = "dd3662-08"
 SHOPIFY_URL = f"https://{SHOPIFY_API_KEY}:{SHOPIFY_PASSWORD}@{SHOPIFY_SHOP_NAME}.myshopify.com/admin/api/2023-10"
 
 # Analysis settings
-DAYS_BACK = 600  # Get data for the last 30 days
+DAYS_BACK = 1100  # Get data for the last 30 days
 OUTPUT_DIR = "./output"  # Directory to save output files
 
 #############################################

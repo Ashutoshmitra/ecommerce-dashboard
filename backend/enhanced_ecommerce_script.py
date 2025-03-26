@@ -32,10 +32,42 @@ EXTENDED_ANALYSIS_DAYS = 30  # Days to look beyond attribution window
 
 # Shopify Base URL
 SHOPIFY_URL = f"https://{SHOPIFY_API_KEY}:{SHOPIFY_PASSWORD}@{SHOPIFY_SHOP_NAME}.myshopify.com/admin/api/2023-10"
-USD_TO_EUR_RATE = 0.96
+USD_TO_EUR_RATE = get_exchange_rate("USD", "EUR")
+
 #############################################
 # SHOPIFY API FUNCTIONS
 #############################################
+
+def get_exchange_rate(from_currency="USD", to_currency="EUR"):
+    """
+    Get the current exchange rate from one currency to another.
+    
+    Parameters:
+    from_currency (str): Source currency code (default: USD)
+    to_currency (str): Target currency code (default: EUR)
+    
+    Returns:
+    float: Exchange rate or fallback value of 0.96 if API calls fail
+    """
+    import requests
+    
+    try:
+        # Use a free exchange rate API
+        response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{from_currency}", timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            rate = data["rates"].get(to_currency)
+            if rate is not None:
+                print(f"Current exchange rate: 1 {from_currency} = {rate} {to_currency}")
+                return rate
+        
+        print(f"Could not get current exchange rate. Using fallback rate: 0.96")
+        return 0.96
+        
+    except Exception as e:
+        print(f"Error fetching exchange rate: {str(e)}. Using fallback rate: 0.96")
+        return 0.96
 
 def update_shopify_url(api_key=None, password=None, shop_name=None):
     """Update the Shopify URL based on potentially updated credentials"""
@@ -824,7 +856,6 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
     if not output_dir or not os.path.exists(output_dir):
         output_dir = os.environ.get('DATA_DIR', '.')
         os.makedirs(output_dir, exist_ok=True)
-
     
     campaign_analysis_df = analysis_results['campaign_analysis']
     
@@ -834,9 +865,6 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
     
     # Create a combined CSV with all relevant data
     combined_df = campaign_analysis_df.copy()
-    
-    # REMOVE THIS LINE - We want to keep all entries including product-level entries
-    # combined_df = combined_df[~combined_df.index.str.contains('__PRODUCT_', na=False)]
     
     # Add refund metrics to the first row of the DataFrame
     if not combined_df.empty and 'refund_analysis' in analysis_results:
@@ -851,6 +879,16 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
         # Convert the top refund reasons to a JSON string and add to the CSV
         top_reasons = refund_analysis.get('top_refund_reasons', [])
         combined_df.loc[combined_df.index[0], 'Top Refund Reasons'] = json.dumps(top_reasons)
+    
+    # Add product revenue details to the first row
+    if not combined_df.empty and 'Product Revenue Details' in analysis_results['summary']:
+        product_revenue = analysis_results['summary']['Product Revenue Details']
+        combined_df.loc[combined_df.index[0], 'Product Revenue Details'] = json.dumps(product_revenue)
+    
+    # Add Shopify revenue and orders to the first row
+    if not combined_df.empty:
+        combined_df.loc[combined_df.index[0], 'Total Shopify Revenue'] = analysis_results['summary'].get('Total Shopify Revenue', 0)
+        combined_df.loc[combined_df.index[0], 'Total Shopify Orders'] = analysis_results['summary'].get('Total Shopify Orders', 0)
 
     # Drop complex columns that can't be easily represented in CSV
     if 'Daily Sales' in combined_df.columns:
@@ -873,7 +911,7 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
     print("\nE-commerce Campaign Analysis Summary")
     print("=" * 50)
     for key, value in analysis_results['summary'].items():
-        if key != 'Top Performing Ads':  # Handle this separately
+        if key != 'Top Performing Ads' and key != 'Product Revenue Details':  # Handle these separately
             print(f"{key}: {value}")
 
     # Print Top Performers
@@ -914,7 +952,6 @@ def create_output_files(analysis_results, timestamp=None, output_dir="."):
         print("\nTop Refund Reasons:")
         for reason, count in refund_analysis.get('top_refund_reasons', []):
             print(f"- {reason}: {count} refunds")
-
 
     print(f"\nResults saved to: {output_filename}")
     
@@ -957,6 +994,10 @@ def split_product_lists(campaign_results):
             # Calculate metrics to distribute
             num_products = len(product_name)
             
+            # Mark the original campaign entry as a collection for filtering in the UI
+            data['isCollectionCampaign'] = True
+            expanded_results[campaign] = data
+            
             # For each product, create a new entry
             for i, product in enumerate(product_name):
                 new_campaign_key = f"{campaign}__PRODUCT_{i+1}"
@@ -978,20 +1019,54 @@ def split_product_lists(campaign_results):
                         new_data[metric] = new_data[metric] / num_products
                 
                 # Recalculate derived metrics
-                new_data['Attribution Net Profit'] = new_data['Attribution Gross Profit'] - new_data['Ad Spend']
-                new_data['Attribution ROI (%)'] = (new_data['Attribution Net Profit'] / new_data['Ad Spend']) * 100 if new_data['Ad Spend'] > 0 else np.nan
-                new_data['Attribution ROAS'] = new_data['Attribution Revenue'] / new_data['Ad Spend'] if new_data['Ad Spend'] > 0 else np.nan
-                new_data['Total ROI (%)'] = (new_data['Total Net Profit'] / new_data['Ad Spend']) * 100 if new_data['Ad Spend'] > 0 else np.nan
-                new_data['Total ROAS'] = new_data['Total Revenue'] / new_data['Ad Spend'] if new_data['Ad Spend'] > 0 else np.nan
-                new_data['CTR (%)'] = (new_data['Clicks'] / new_data['Impressions']) * 100 if new_data['Impressions'] > 0 else 0
-                new_data['Conversion Rate (%)'] = (new_data['Attribution Orders'] / new_data['Clicks']) * 100 if new_data['Clicks'] > 0 else 0
-                new_data['CPA'] = new_data['Ad Spend'] / new_data['Attribution Orders'] if new_data['Attribution Orders'] > 0 else np.nan
-                new_data['Profit Margin (%)'] = (new_data['Attribution Net Profit'] / new_data['Attribution Revenue']) * 100 if new_data['Attribution Revenue'] > 0 else np.nan
-                new_data['Total Profit Margin (%)'] = (new_data['Total Net Profit'] / new_data['Total Revenue']) * 100 if new_data['Total Revenue'] > 0 else np.nan
+                if 'Attribution Gross Profit' in new_data and 'Ad Spend' in new_data:
+                    new_data['Attribution Net Profit'] = new_data['Attribution Gross Profit'] - new_data['Ad Spend']
+                    if new_data['Ad Spend'] > 0:
+                        new_data['Attribution ROI (%)'] = (new_data['Attribution Net Profit'] / new_data['Ad Spend']) * 100
+                        new_data['Attribution ROAS'] = new_data['Attribution Revenue'] / new_data['Ad Spend']
+                    else:
+                        new_data['Attribution ROI (%)'] = np.nan
+                        new_data['Attribution ROAS'] = np.nan
                 
-                # Add original campaign reference
+                if 'Total Net Profit' in new_data and 'Ad Spend' in new_data and new_data['Ad Spend'] > 0:
+                    new_data['Total ROI (%)'] = (new_data['Total Net Profit'] / new_data['Ad Spend']) * 100
+                else:
+                    new_data['Total ROI (%)'] = np.nan
+                    
+                if 'Total Revenue' in new_data and 'Ad Spend' in new_data and new_data['Ad Spend'] > 0:
+                    new_data['Total ROAS'] = new_data['Total Revenue'] / new_data['Ad Spend']
+                else:
+                    new_data['Total ROAS'] = np.nan
+                    
+                if 'Clicks' in new_data and 'Impressions' in new_data and new_data['Impressions'] > 0:
+                    new_data['CTR (%)'] = (new_data['Clicks'] / new_data['Impressions']) * 100
+                else:
+                    new_data['CTR (%)'] = 0
+                    
+                if 'Attribution Orders' in new_data and 'Clicks' in new_data and new_data['Clicks'] > 0:
+                    new_data['Conversion Rate (%)'] = (new_data['Attribution Orders'] / new_data['Clicks']) * 100
+                else:
+                    new_data['Conversion Rate (%)'] = 0
+                    
+                if 'Attribution Orders' in new_data and 'Ad Spend' in new_data and new_data['Attribution Orders'] > 0:
+                    new_data['CPA'] = new_data['Ad Spend'] / new_data['Attribution Orders']
+                else:
+                    new_data['CPA'] = np.nan
+                    
+                if 'Attribution Net Profit' in new_data and 'Attribution Revenue' in new_data and new_data['Attribution Revenue'] > 0:
+                    new_data['Profit Margin (%)'] = (new_data['Attribution Net Profit'] / new_data['Attribution Revenue']) * 100
+                else:
+                    new_data['Profit Margin (%)'] = np.nan
+                    
+                if 'Total Net Profit' in new_data and 'Total Revenue' in new_data and new_data['Total Revenue'] > 0:
+                    new_data['Total Profit Margin (%)'] = (new_data['Total Net Profit'] / new_data['Total Revenue']) * 100
+                else:
+                    new_data['Total Profit Margin (%)'] = np.nan
+                
+                # Add original campaign reference and mark as a distributed product
                 new_data['Original Campaign'] = campaign
                 new_data['Product Count'] = num_products
+                new_data['isDistributedProduct'] = True
                 
                 # Store the new entry
                 expanded_results[new_campaign_key] = new_data
@@ -1035,6 +1110,54 @@ def find_matching_collection(collection_code, collection_map_df):
             
     return pd.DataFrame()  # Return empty DataFrame if no match found
 
+def add_total_revenue_summary(shopify_data, analysis_results):
+    """
+    Add direct revenue totals from Shopify data to the analysis results
+    to ensure all revenue is accounted for, even orders not attributed to campaigns.
+    """
+    order_items_df = pd.DataFrame(shopify_data['order_items'])
+    
+    # Calculate total sales directly from order data
+    total_orders = len(order_items_df)
+    total_revenue = order_items_df['price'].sum() if 'price' in order_items_df.columns else 0
+    
+    # Get unique products
+    product_revenue = {}
+    if 'product_id' in order_items_df.columns and 'title' in order_items_df.columns and 'price' in order_items_df.columns:
+        for product_id in order_items_df['product_id'].unique():
+            if pd.isna(product_id):
+                continue
+                
+            product_orders = order_items_df[order_items_df['product_id'] == product_id]
+            product_title = product_orders['title'].iloc[0] if not product_orders.empty else f"Product {product_id}"
+            product_revenue[product_title] = product_orders['price'].sum()
+    
+    # Add to the first row of analysis
+    if not analysis_results['campaign_analysis'].empty:
+        first_idx = analysis_results['campaign_analysis'].index[0]
+        analysis_results['campaign_analysis'].loc[first_idx, 'Total Shopify Revenue'] = total_revenue
+        analysis_results['campaign_analysis'].loc[first_idx, 'Total Shopify Orders'] = total_orders
+    
+    # Add to summary
+    analysis_results['summary']['Total Shopify Revenue'] = total_revenue
+    analysis_results['summary']['Total Shopify Orders'] = total_orders
+    analysis_results['summary']['Product Revenue Details'] = product_revenue
+    
+    # Print comparison
+    attributed_revenue = analysis_results['summary'].get('Total Revenue', 0)
+    print("\n=== REVENUE COMPARISON ===")
+    print(f"Total Shopify Revenue: €{total_revenue:.2f}")
+    print(f"Total Attributed Revenue: €{attributed_revenue:.2f}")
+    print(f"Difference: €{total_revenue - attributed_revenue:.2f}")
+    print(f"Attribution Coverage: {(attributed_revenue / total_revenue * 100) if total_revenue > 0 else 0:.2f}%")
+    
+    # Print top products by revenue
+    print("\nTop Products by Revenue:")
+    for product, revenue in sorted(product_revenue.items(), key=lambda x: x[1], reverse=True)[:10]:
+        print(f"{product}: €{revenue:.2f}")
+    
+    return analysis_results
+
 def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
     """Analyze the campaign data with enriched information"""
     # Extract relevant data
@@ -1051,6 +1174,18 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
     # Initialize results dictionary with enhanced metrics
     campaign_results = {}
     
+    # Create a set to track processed orders to prevent double counting
+    processed_order_items = set()
+
+    campaign_status_map = {}
+
+    if facebook_data.get('metrics_campaign'):
+        for campaign in facebook_data['metrics_campaign']:
+            campaign_name = campaign.get('campaign_name')
+            campaign_status = campaign.get('status', 'Unknown')
+            campaign_status_map[campaign_name] = campaign_status
+
+
     # Process each campaign in Facebook metrics
     for campaign_data in facebook_metrics:
         # Skip if campaign_name is missing
@@ -1113,6 +1248,9 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
         # Track matched products and their IDs
         matched_product_ids = []
         
+        # Track processed order items for this campaign
+        campaign_processed_orders = set()
+        
         if is_collection_campaign(campaign):
             # Process collection campaign
             collection_code = extract_collection_code(campaign)
@@ -1146,6 +1284,7 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                     
                     # Process orders within attribution window
                     for product_id in collection_product_ids:
+                        # Get orders for this product in the attribution window
                         attributed_orders = order_items_df[
                             (order_items_df['product_id'] == product_id) & 
                             (order_items_df['created_at'] >= campaign_start_date) & 
@@ -1153,13 +1292,25 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                         ]
                         
                         if not attributed_orders.empty:
-                            attributed_revenue += attributed_orders['price'].sum()
-                            attributed_orders_count += len(attributed_orders)
-                            
-                            # Track daily sales
+                            # Only count orders that haven't been processed for this product
                             for _, order in attributed_orders.iterrows():
+                                order_id_key = (order['order_id'], order['line_item_id'])
+                                
+                                # Skip if we've already counted this order item
+                                if order_id_key in processed_order_items:
+                                    continue
+                                    
+                                # Add to campaign revenue and count
+                                attributed_revenue += order['price']
+                                attributed_orders_count += 1
+                                
+                                # Track daily sales
                                 order_date = order['created_at'].date()
                                 daily_sales[order_date] += order['price']
+                                
+                                # Mark this order as processed
+                                processed_order_items.add(order_id_key)
+                                campaign_processed_orders.add(order_id_key)
                     
                     # Process orders in extended window (post-attribution)
                     for product_id in collection_product_ids:
@@ -1170,8 +1321,21 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                         ]
                         
                         if not extended_orders.empty:
-                            extended_revenue += extended_orders['price'].sum()
-                            extended_orders_count += len(extended_orders)
+                            # Only count orders that haven't been processed
+                            for _, order in extended_orders.iterrows():
+                                order_id_key = (order['order_id'], order['line_item_id'])
+                                
+                                # Skip if we've already counted this order item
+                                if order_id_key in processed_order_items:
+                                    continue
+                                    
+                                # Add to extended revenue and count
+                                extended_revenue += order['price']
+                                extended_orders_count += 1
+                                
+                                # Mark this order as processed
+                                processed_order_items.add(order_id_key)
+                                campaign_processed_orders.add(order_id_key)
             else:
                 # Fall back to the campaign name for collections without explicit code
                 print(f"Warning: No collection code found in campaign name: {campaign}")
@@ -1204,13 +1368,25 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                 ]
                 
                 if not attributed_orders.empty:
-                    attributed_revenue += attributed_orders['price'].sum()
-                    attributed_orders_count += len(attributed_orders)
-                    
-                    # Track daily sales
+                    # Only count orders that haven't been processed
                     for _, order in attributed_orders.iterrows():
+                        order_id_key = (order['order_id'], order['line_item_id'])
+                        
+                        # Skip if we've already counted this order item
+                        if order_id_key in processed_order_items:
+                            continue
+                            
+                        # Add to campaign revenue and count
+                        attributed_revenue += order['price']
+                        attributed_orders_count += 1
+                        
+                        # Track daily sales
                         order_date = order['created_at'].date()
                         daily_sales[order_date] += order['price']
+                        
+                        # Mark this order as processed
+                        processed_order_items.add(order_id_key)
+                        campaign_processed_orders.add(order_id_key)
                 
                 # Process orders in extended window
                 extended_orders = order_items_df[
@@ -1220,8 +1396,21 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                 ]
                 
                 if not extended_orders.empty:
-                    extended_revenue += extended_orders['price'].sum()
-                    extended_orders_count += len(extended_orders)
+                    # Only count orders that haven't been processed
+                    for _, order in extended_orders.iterrows():
+                        order_id_key = (order['order_id'], order['line_item_id'])
+                        
+                        # Skip if we've already counted this order item
+                        if order_id_key in processed_order_items:
+                            continue
+                            
+                        # Add to extended revenue and count
+                        extended_revenue += order['price']
+                        extended_orders_count += 1
+                        
+                        # Mark this order as processed
+                        processed_order_items.add(order_id_key)
+                        campaign_processed_orders.add(order_id_key)
             else:
                 # Try looking up product directly in the collection mapping
                 product_match = collection_map_df[collection_map_df['product_title'].str.lower() == extracted_name.lower()]
@@ -1241,13 +1430,25 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                     ]
                     
                     if not attributed_orders.empty:
-                        attributed_revenue += attributed_orders['price'].sum()
-                        attributed_orders_count += len(attributed_orders)
-                        
-                        # Track daily sales
+                        # Only count orders that haven't been processed
                         for _, order in attributed_orders.iterrows():
+                            order_id_key = (order['order_id'], order['line_item_id'])
+                            
+                            # Skip if we've already counted this order item
+                            if order_id_key in processed_order_items:
+                                continue
+                                
+                            # Add to campaign revenue and count
+                            attributed_revenue += order['price']
+                            attributed_orders_count += 1
+                            
+                            # Track daily sales
                             order_date = order['created_at'].date()
                             daily_sales[order_date] += order['price']
+                            
+                            # Mark this order as processed
+                            processed_order_items.add(order_id_key)
+                            campaign_processed_orders.add(order_id_key)
                     
                     # Process orders in extended window
                     extended_orders = order_items_df[
@@ -1257,8 +1458,21 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                     ]
                     
                     if not extended_orders.empty:
-                        extended_revenue += extended_orders['price'].sum()
-                        extended_orders_count += len(extended_orders)
+                        # Only count orders that haven't been processed
+                        for _, order in extended_orders.iterrows():
+                            order_id_key = (order['order_id'], order['line_item_id'])
+                            
+                            # Skip if we've already counted this order item
+                            if order_id_key in processed_order_items:
+                                continue
+                                
+                            # Add to extended revenue and count
+                            extended_revenue += order['price']
+                            extended_orders_count += 1
+                            
+                            # Mark this order as processed
+                            processed_order_items.add(order_id_key)
+                            campaign_processed_orders.add(order_id_key)
                 else:
                     # If no exact match is found, try partial matching
                     potential_products = collection_map_df[collection_map_df['product_title'].str.contains(extracted_name, case=False, regex=False)]
@@ -1277,13 +1491,25 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                         ]
                         
                         if not attributed_orders.empty:
-                            attributed_revenue += attributed_orders['price'].sum()
-                            attributed_orders_count += len(attributed_orders)
-                            
-                            # Track daily sales
+                            # Only count orders that haven't been processed
                             for _, order in attributed_orders.iterrows():
+                                order_id_key = (order['order_id'], order['line_item_id'])
+                                
+                                # Skip if we've already counted this order item
+                                if order_id_key in processed_order_items:
+                                    continue
+                                    
+                                # Add to campaign revenue and count
+                                attributed_revenue += order['price']
+                                attributed_orders_count += 1
+                                
+                                # Track daily sales
                                 order_date = order['created_at'].date()
                                 daily_sales[order_date] += order['price']
+                                
+                                # Mark this order as processed
+                                processed_order_items.add(order_id_key)
+                                campaign_processed_orders.add(order_id_key)
                         
                         # Process orders in extended window
                         extended_orders = order_items_df[
@@ -1293,16 +1519,29 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
                         ]
                         
                         if not extended_orders.empty:
-                            extended_revenue += extended_orders['price'].sum()
-                            extended_orders_count += len(extended_orders)
+                            # Only count orders that haven't been processed
+                            for _, order in extended_orders.iterrows():
+                                order_id_key = (order['order_id'], order['line_item_id'])
+                                
+                                # Skip if we've already counted this order item
+                                if order_id_key in processed_order_items:
+                                    continue
+                                    
+                                # Add to extended revenue and count
+                                extended_revenue += order['price']
+                                extended_orders_count += 1
+                                
+                                # Mark this order as processed
+                                processed_order_items.add(order_id_key)
+                                campaign_processed_orders.add(order_id_key)
                     else:
                         # If no match is found, use the extracted name but mark it as having no sales data
                         product_names.append(f"{extracted_name} [No Sales Found]")
                         print(f"No sales data found for campaign: {campaign}, product: {extracted_name}")
         
         # Calculate financial metrics
-        total_revenue = attributed_revenue + extended_revenue
-        total_orders = attributed_orders_count + extended_orders_count
+        total_revenue = attributed_revenue
+        total_orders = attributed_orders_count
         
         # Calculate COGS
         cogs = attributed_revenue * COGS_PERCENTAGE
@@ -1358,15 +1597,25 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
         sales_per_product = {}
         if isinstance(matched_product_ids, list) and len(matched_product_ids) > 0:
             for product_id in matched_product_ids:
-                product_orders = order_items_df[
-                    (order_items_df['product_id'] == product_id) & 
-                    (order_items_df['created_at'] >= campaign_start_date) & 
-                    (order_items_df['created_at'] <= attribution_end)
-                ]
+                # Get all orders for this product in this campaign
+                product_orders = []
+                for order_id_key in campaign_processed_orders:
+                    order_id, line_item_id = order_id_key
+                    order_row = order_items_df[
+                        (order_items_df['order_id'] == order_id) &
+                        (order_items_df['line_item_id'] == line_item_id) &
+                        (order_items_df['product_id'] == product_id)
+                    ]
+                    if not order_row.empty:
+                        product_orders.append(order_row)
                 
-                if not product_orders.empty:
-                    product_revenue = product_orders['price'].sum()
-                    product_orders_count = len(product_orders)
+                if product_orders:
+                    # Concatenate all product orders
+                    product_orders_df = pd.concat(product_orders)
+                    product_revenue = product_orders_df['price'].sum()
+                    product_orders_count = len(product_orders_df)
+                    
+                    # Get the product title
                     product_row = collection_map_df[collection_map_df['product_id'] == product_id]
                     if not product_row.empty:
                         product_title = product_row['product_title'].iloc[0]
@@ -1382,6 +1631,7 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
             'URL': product_url if "COLLECTION" in campaign else (product_urls[0] if product_urls and len(product_urls) > 0 else None),
             'Campaign Start': campaign_start_date,
             'Campaign End': attribution_end,
+            'status': campaign_status_map.get(campaign, 'Unknown'),
             
             # Attribution window metrics
             'Attribution Revenue': attributed_revenue,
@@ -1426,7 +1676,10 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
             
             # Store daily sales data for trend analysis
             'Daily Sales': dict(daily_sales),
-            'Matched Product IDs': matched_product_ids
+            'Matched Product IDs': matched_product_ids,
+            
+            # Store the processed order count for debugging
+            'Processed Order Count': len(campaign_processed_orders)
         }
     
     # Split product lists into individual products
@@ -1465,6 +1718,36 @@ def analyze_campaign_data(facebook_data, shopify_data, start_date, end_date):
         'Refund Value Percentage': refund_analysis.get('refund_value_percentage', 0),
         'Top Refund Reasons': refund_analysis.get('top_refund_reasons', [])
     }
+    
+    # Print debug information about order tracking
+    print(f"\nORDER TRACKING SUMMARY:")
+    print(f"Total unique order items processed: {len(processed_order_items)}")
+    
+    # Count total orders in the dataset for comparison
+    total_orders_in_range = len(order_items_df[
+        (order_items_df['created_at'] >= start_date) & 
+        (order_items_df['created_at'] <= end_date)
+    ])
+    print(f"Total order items in date range: {total_orders_in_range}")
+    
+    # Print product-specific diagnostics
+    product_order_counts = {}
+    for product_id in order_items_df['product_id'].unique():
+        if pd.isna(product_id):
+            continue
+            
+        count = len(order_items_df[order_items_df['product_id'] == product_id])
+        product_name = None
+        product_row = collection_map_df[collection_map_df['product_id'] == product_id]
+        if not product_row.empty:
+            product_name = product_row['product_title'].iloc[0]
+        
+        if product_name:
+            product_order_counts[product_name] = count
+    
+    print("\nTop products by order count in original data:")
+    for product, count in sorted(product_order_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+        print(f"{product}: {count} orders")
     
     return {
         'campaign_analysis': campaign_analysis_df,
@@ -1545,6 +1828,10 @@ def main():
     # Analyze data
     print("\n=== ANALYZING CAMPAIGN DATA ===")
     analysis_results = analyze_campaign_data(facebook_data, shopify_data, start_date, end_date)
+    
+    # Add total revenue summary from Shopify data
+    analysis_results = add_total_revenue_summary(shopify_data, analysis_results)
+    
     print("\nNote: Product lists have been split into individual products with distributed metrics.")
     
     # Create output files
@@ -1552,7 +1839,6 @@ def main():
     create_output_files(analysis_results, timestamp, args.output_dir)
     
     print("\nAnalysis completed successfully!")
-
 
 if __name__ == "__main__":
     main()

@@ -20,6 +20,38 @@ DATA_DIR = os.environ.get('DATA_DIR', os.path.join(PROJECT_ROOT, 'backend', 'dat
 # Ensure the directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
 
+def get_exchange_rate(from_currency="USD", to_currency="EUR"):
+    """
+    Get the current exchange rate from one currency to another.
+    
+    Parameters:
+    from_currency (str): Source currency code (default: USD)
+    to_currency (str): Target currency code (default: EUR)
+    
+    Returns:
+    float: Exchange rate or fallback value of 0.96 if API calls fail
+    """
+    import requests
+    
+    try:
+        # Use a free exchange rate API
+        response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{from_currency}", timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            rate = data["rates"].get(to_currency)
+            if rate is not None:
+                print(f"Current exchange rate: 1 {from_currency} = {rate} {to_currency}")
+                return rate
+        
+        print(f"Could not get current exchange rate. Using fallback rate: 0.96")
+        return 0.96
+        
+    except Exception as e:
+        print(f"Error fetching exchange rate: {str(e)}. Using fallback rate: 0.96")
+        return 0.96
+
+USD_TO_EUR_RATE = get_exchange_rate("USD", "EUR")
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -322,6 +354,93 @@ def get_latest_data():
     except Exception as e:
         app.logger.error(f"Error getting latest data: {str(e)}")
         return jsonify({"error": f"Error getting latest data: {str(e)}"}), 500
+
+@app.route('/api/download-csv', methods=['GET'])
+def download_csv_with_currency():
+    try:
+        # Get query parameters
+        filename = request.args.get('filename')
+        currency = request.args.get('currency', 'EUR').upper()
+        
+        app.logger.info(f"Download CSV request: filename={filename}, currency={currency}")
+        
+        # Security check to prevent directory traversal
+        if '..' in filename or filename.startswith('/'):
+            app.logger.error("Invalid filename: potential directory traversal")
+            return jsonify({"error": "Invalid filename"}), 400
+            
+        # Only allow accessing CSV files
+        if not filename.endswith('.csv'):
+            app.logger.error("Invalid file type: must be CSV")
+            return jsonify({"error": "Only CSV files are allowed"}), 400
+            
+        # Get the full path in the data directory
+        file_path = get_data_file_path(filename)
+        
+        # Verify file exists
+        if not os.path.exists(file_path):
+            app.logger.error(f"File not found: {file_path}")
+            return jsonify({"error": f"File {filename} not found"}), 404
+        
+        # Read the CSV 
+        import pandas as pd
+        import tempfile
+        
+        # Create a temporary file in the same directory
+        temp_dir = DATA_DIR
+        fd, temp_path = tempfile.mkstemp(suffix=f'_{currency}.csv', dir=temp_dir)
+        
+        try:
+            # Read the original file
+            df = pd.read_csv(file_path)
+            
+            # Define columns to convert if currency is different
+            financial_columns = [
+                'Ad Spend', 'Total Revenue', 'Total Net Profit', 
+                'Attribution Revenue', 'Extended Revenue',
+                'Total COGS', 'Total Gross Profit',
+                'Attribution Gross Profit', 'Attribution Net Profit'
+            ]
+            
+            # Convert to USD if requested
+            if currency == 'USD':
+                # Multiply financial columns by exchange rate
+                for col in financial_columns:
+                    if col in df.columns:
+                        df[col] = df[col] / USD_TO_EUR_RATE
+            
+            # Save to the temporary file
+            df.to_csv(temp_path, index=False)
+            
+            # Close the file descriptor
+            os.close(fd)
+            
+            # Send the temporary file
+            response = send_file(
+                temp_path,
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name=f'ecommerce_analysis_{currency}.csv'
+            )
+            
+            # Add headers to allow cleanup
+            response.headers.add('X-Temp-File', temp_path)
+            
+            return response
+        
+        except Exception as e:
+            # Clean up the temporary file if an error occurs
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+            
+            app.logger.error(f"Error processing CSV: {str(e)}")
+            return jsonify({"error": f"Error processing CSV: {str(e)}"}), 500
+    
+    except Exception as e:
+        app.logger.error(f"Unexpected error in download_csv_with_currency: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500@app.route('/api/download-csv', methods=['GET'])
 
 @app.route('/data/<filename>', methods=['GET'])
 def get_csv_file(filename):

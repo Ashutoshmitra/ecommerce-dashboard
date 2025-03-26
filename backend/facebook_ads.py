@@ -14,7 +14,7 @@ FB_AD_ACCOUNT_ID = "599673092559823"
 FB_ACCESS_TOKEN = "EAATWoaVO7YkBO00ZBDeV8NMjxNlt0mWkyQasFghoJujc9bzEWda2e8rbLVZA7umkhmyeR3MZA5Rgxls1wVadHHcf5lBpkfN4U7ZBrLNSDDmSq2BhXkfEaILr8bTxMraYxHcWKcter1k7HLzVUZCisvHjmTAcY3F5o8bEtePfDJVg3iDGm8OS0qjzwLqvxWmaOAVZBDvjRQ"
 
 # Analysis Parameters
-DAYS_BACK = 600      # Get data for the last 30 days
+DAYS_BACK = 1100      # Get data for the last 30 days
 OUTPUT_DIR = "./output"  # Directory to save output files
 USD_TO_EUR_RATE = 0.96  # Conversion rate from USD to EUR
 
@@ -92,7 +92,7 @@ class FacebookAdAnalyzer:
                 
         return all_data
         
-    def get_campaigns(self, limit=100):
+    def get_campaigns(self, limit=10000):
         """
         Get campaigns in the ad account
         
@@ -275,15 +275,15 @@ class FacebookAdAnalyzer:
     def get_facebook_data(self, start_date, end_date):
         """Get all Facebook Ads data for the specified date range"""
         # Get campaigns
-        campaigns = self.get_campaigns(limit=100)
+        campaigns = self.get_campaigns(limit=10000)
         
         # Get ad sets
         campaign_ids = [campaign['id'] for campaign in campaigns]
-        adsets = self.get_adsets(campaign_ids=campaign_ids, limit=200)
+        adsets = self.get_adsets(campaign_ids=campaign_ids, limit=10000)
         
         # Get ads
         adset_ids = [adset['id'] for adset in adsets]
-        ads = self.get_ads(adset_ids=adset_ids, limit=300)
+        ads = self.get_ads(adset_ids=adset_ids, limit=10000)
         
         # Get financial metrics
         metrics_campaign = self.get_financial_metrics(start_date, end_date, level="campaign")

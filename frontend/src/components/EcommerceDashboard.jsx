@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from 'recharts';
 import Papa from 'papaparse';
 import _ from 'lodash';
@@ -32,7 +32,9 @@ const EcommerceDashboard = ({
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [productSortField, setProductSortField] = useState('revenue');
-  const [productSortDirection, setProductSortDirection] = useState('desc');
+  const [displayCurrency, setDisplayCurrency] = useState('EUR'); // Default to EUR
+  const [USD_TO_EUR_RATE, setUSD_TO_EUR_RATE] = useState(0.96); // Default conversion rate
+    const [productSortDirection, setProductSortDirection] = useState('desc');
   const [customDateStart, setCustomDateStart] = useState(() => {
     // Default to 30 days ago (matching default filterDays)
     const date = new Date();
@@ -47,7 +49,7 @@ const EcommerceDashboard = ({
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(
     localStorage.getItem('scheduled_updates') === 'true'
   );
-
+  
   // Theme colors
   const themeColors = {
     light: {
@@ -85,7 +87,12 @@ const EcommerceDashboard = ({
   };
 
   const theme = darkMode ? themeColors.dark : themeColors.light;
-
+  // Currency conversion helper function
+  const convertCurrency = (amount) => {
+    if (displayCurrency === 'EUR' || !amount) return amount;
+    // Convert EUR to USD (divide by the rate to get USD)
+    return amount / USD_TO_EUR_RATE;
+  };
   // Campaign colors for consistent coloring
   const campaignColors = [
     '#6366f1', '#ec4899', '#8b5cf6', '#10b981', '#f59e0b', 
@@ -101,8 +108,31 @@ const EcommerceDashboard = ({
   "03 APR - Casual Jeans - 5.3 - SINGLE PRODUCT",Casual Jeans,750.30,1125.45,1.50,-75.18,31500,1280,4.06,36,2.81
   "12 APR - C31 ADS Collection",Collection C31,1350.75,3783.69,2.80,1297.72,52300,2120,4.05,89,4.20`;
   
+  const fetchExchangeRate = useCallback(async () => {
+    try {
+      // Use a free exchange rate API
+      const response = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.rates && data.rates.EUR) {
+          console.log(`Fetched exchange rate: 1 USD = ${data.rates.EUR} EUR`);
+          setUSD_TO_EUR_RATE(data.rates.EUR);
+          return data.rates.EUR;
+        }
+      }
+      console.log('Could not fetch exchange rate, using default: 0.96');
+      return 0.96; // Default fallback
+    } catch (error) {
+      console.error('Error fetching exchange rate:', error);
+      return 0.96; // Default fallback
+    }
+  }, []);
+
   // Load data function
   const loadData = useCallback(async () => {
+    // First fetch the exchange rate
+    await fetchExchangeRate();
+
     setIsLoading(true);
     try {
       // Get the latest data file from the API
@@ -238,14 +268,79 @@ const extractDateFromCampaignName = (campaignName) => {
 };
 
 /**
+ * Check if a campaign name is for a collection campaign
+ * @param {string} campaignName - The campaign name
+ * @return {boolean} - True if this is a collection campaign
+ */
+const isCollectionCampaign = (campaignName) => {
+  if (!campaignName) return false;
+  // Check for explicit collection indicators
+  if (campaignName.includes("COLLECTION") || campaignName.includes("ADS Collection")) {
+    return true;
+  }
+  // Check for product suffix pattern from split products
+  if (campaignName.includes("__PRODUCT_")) {
+    return true;
+  }
+  // Check for collection code pattern (C + number)
+  if (/\bC\d+\b/.test(campaignName)) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Extract base campaign name without product suffix
+ * @param {string} campaignName - The campaign name
+ * @return {string} - Base campaign name
+ */
+const getBaseCampaignName = (campaignName) => {
+  if (!campaignName) return "Unknown Campaign";
+  
+  // Remove product suffix
+  const match = campaignName.match(/(.*?)__PRODUCT_\d+$/);
+  if (match) {
+    return match[1];
+  }
+  
+  return campaignName;
+};
+
+/**
  * Filter data array based on days back from current date
  * Uses campaign dates from either Campaign Start field or extracts from campaign name
  */
-const filterDataByDays = useCallback((dataArray, daysBack) => {
-  if (!dataArray.length) return dataArray;
-  
-  // If using custom date range, filter by that instead of days back
-  if (useCustomDateRange && customDateStart && customDateEnd) {
+  const filterDataByDays = useCallback((dataArray, daysBack) => {
+    if (!dataArray.length) return dataArray;
+    
+    // If using custom date range, filter by that instead of days back
+    if (useCustomDateRange && customDateStart && customDateEnd) {
+      return dataArray.filter(item => {
+        let campaignDate;
+        
+        // First try to use the Campaign Start date if available
+        if (item['Campaign Start']) {
+          campaignDate = new Date(item['Campaign Start']);
+        } else {
+          // Otherwise extract date from campaign name
+          const campaignName = item.campaignName || item[''] || '';
+          campaignDate = extractDateFromCampaignName(campaignName);
+        }
+        
+        // If we can't determine a date, include the campaign by default
+        if (!campaignDate) return true;
+        
+        // Include only campaigns between the custom date range
+        return campaignDate >= customDateStart && campaignDate <= customDateEnd;
+      });
+    }
+    
+    // Standard days back filtering
+    if (!daysBack) return dataArray;
+    
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysBack);
+    
     return dataArray.filter(item => {
       let campaignDate;
       
@@ -261,45 +356,115 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
       // If we can't determine a date, include the campaign by default
       if (!campaignDate) return true;
       
-      // Include only campaigns between the custom date range
-      return campaignDate >= customDateStart && campaignDate <= customDateEnd;
+      // Include only campaigns from after the cutoff date
+      return campaignDate >= cutoffDate;
     });
-  }
-  
-  // Standard days back filtering
-  if (!daysBack) return dataArray;
-  
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - daysBack);
-  
-  return dataArray.filter(item => {
-    let campaignDate;
-    
-    // First try to use the Campaign Start date if available
-    if (item['Campaign Start']) {
-      campaignDate = new Date(item['Campaign Start']);
-    } else {
-      // Otherwise extract date from campaign name
-      const campaignName = item.campaignName || item[''] || '';
-      campaignDate = extractDateFromCampaignName(campaignName);
-    }
-    
-    // If we can't determine a date, include the campaign by default
-    if (!campaignDate) return true;
-    
-    // Include only campaigns from after the cutoff date
-    return campaignDate >= cutoffDate;
-  });
-}, [useCustomDateRange, customDateStart, customDateEnd]);
+  }, [useCustomDateRange, customDateStart, customDateEnd]);
 
-  const filteredData = useCallback(() => {
+  const groupedCampaignData = useMemo(() => {
     if (!data.length) return [];
     
-    // Filter data based on option selected (last 7 days, 30 days, etc.)
+    // First filter data based on option selected (last 7 days, 30 days, etc.)
     const filtered = filterDataByDays(data, filterDays);
     
-    // Sort filtered data by campaign date in descending order (most recent first)
-    return filtered.sort((a, b) => {
+    // Group campaigns with the same base name (for collection campaigns)
+    const groupedCampaigns = _.groupBy(filtered, item => {
+      return getBaseCampaignName(item.campaignName || item[''] || 'Unknown Campaign');
+    });
+    
+    // Process each group
+    const result = Object.entries(groupedCampaigns).map(([baseCampaignName, campaigns]) => {
+      // If just one item, return as is
+      if (campaigns.length === 1) {
+        return campaigns[0];
+      }
+      
+      // Check if this is a collection campaign (has multiple products)
+      const isCollection = isCollectionCampaign(baseCampaignName);
+      
+      // If not a collection or just one entry, return the first
+      if (!isCollection) {
+        return campaigns[0];
+      }
+      
+      // If it's a collection, merge the metrics
+      const mergedCampaign = { ...campaigns[0] };
+      
+      // Set base campaign name without product suffix
+      mergedCampaign.campaignName = baseCampaignName;
+      
+      // Combine Product Names
+      const productNames = campaigns.map(c => c['Product Name']).filter(Boolean);
+      mergedCampaign['Product Name'] = productNames.length > 0 
+        ? (productNames.length === 1 ? productNames[0] : productNames) 
+        : 'Collection';
+      
+      // Sum numeric fields
+      const numericFields = [
+        'Attribution Revenue', 'Attribution Orders', 'Attribution COGS', 
+        'Attribution Gross Profit', 'Extended Revenue', 'Extended Orders',
+        'Total Revenue', 'Total Orders', 'Total COGS', 'Total Gross Profit', 
+        'Total Net Profit', 'Ad Spend', 'Impressions', 'Clicks'
+      ];
+      
+      numericFields.forEach(field => {
+        if (field in mergedCampaign) {
+          mergedCampaign[field] = campaigns.reduce((sum, c) => sum + (c[field] || 0), 0);
+        }
+      });
+      
+      // Recalculate derived metrics
+      if (mergedCampaign['Ad Spend'] > 0) {
+        mergedCampaign['Attribution Net Profit'] = mergedCampaign['Attribution Gross Profit'] - mergedCampaign['Ad Spend'];
+        mergedCampaign['Attribution ROI (%)'] = (mergedCampaign['Attribution Net Profit'] / mergedCampaign['Ad Spend']) * 100;
+        mergedCampaign['Attribution ROAS'] = mergedCampaign['Attribution Revenue'] / mergedCampaign['Ad Spend'];
+        mergedCampaign['Total ROI (%)'] = (mergedCampaign['Total Net Profit'] / mergedCampaign['Ad Spend']) * 100;
+        mergedCampaign['Total ROAS'] = mergedCampaign['Total Revenue'] / mergedCampaign['Ad Spend'];
+      }
+      
+      if (mergedCampaign['Impressions'] > 0) {
+        mergedCampaign['CTR (%)'] = (mergedCampaign['Clicks'] / mergedCampaign['Impressions']) * 100;
+      }
+      
+      if (mergedCampaign['Clicks'] > 0) {
+        mergedCampaign['Conversion Rate (%)'] = (mergedCampaign['Attribution Orders'] / mergedCampaign['Clicks']) * 100;
+      }
+      
+      if (mergedCampaign['Attribution Orders'] > 0) {
+        mergedCampaign['CPA'] = mergedCampaign['Ad Spend'] / mergedCampaign['Attribution Orders'];
+      }
+      
+      if (mergedCampaign['Attribution Revenue'] > 0) {
+        mergedCampaign['Profit Margin (%)'] = (mergedCampaign['Attribution Net Profit'] / mergedCampaign['Attribution Revenue']) * 100;
+      }
+      
+      if (mergedCampaign['Total Revenue'] > 0) {
+        mergedCampaign['Total Profit Margin (%)'] = (mergedCampaign['Total Net Profit'] / mergedCampaign['Total Revenue']) * 100;
+      }
+      
+      if (mergedCampaign['Attribution Orders'] > 0) {
+        mergedCampaign['Attribution Avg Price'] = mergedCampaign['Attribution Revenue'] / mergedCampaign['Attribution Orders'];
+      }
+      
+      if (mergedCampaign['Total Orders'] > 0) {
+        mergedCampaign['Total Avg Price'] = mergedCampaign['Total Revenue'] / mergedCampaign['Total Orders'];
+      }
+      
+      if (mergedCampaign['Total Revenue'] > 0) {
+        mergedCampaign['Attribution Window Revenue (%)'] = (mergedCampaign['Attribution Revenue'] / mergedCampaign['Total Revenue']) * 100;
+        mergedCampaign['Extended Window Revenue (%)'] = (mergedCampaign['Extended Revenue'] / mergedCampaign['Total Revenue']) * 100;
+      }
+      
+      // Add indicator this is a merged collection campaign
+      mergedCampaign.isCollectionCampaign = true;
+      mergedCampaign.productCount = campaigns.length;
+      mergedCampaign.originalCampaigns = campaigns; // Store original campaigns for details modal
+      
+      return mergedCampaign;
+    });
+    
+    // Sort by campaign date in descending order (most recent first)
+    let resultData = result.sort((a, b) => {
       // First try to extract date from 'Campaign Start' field
       let dateA = a['Campaign Start'] ? new Date(a['Campaign Start']) : extractDateFromCampaignName(a.campaignName || a[''] || '');
       let dateB = b['Campaign Start'] ? new Date(b['Campaign Start']) : extractDateFromCampaignName(b.campaignName || b[''] || '');
@@ -310,7 +475,12 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
       // Sort in descending order (most recent first)
       return dateB.getTime() - dateA.getTime();
     });
-  }, [data, filterDays]);
+    
+    // Filter out distributed product entries for the campaigns tab
+    resultData = resultData.filter(item => !item.isDistributedProduct);
+    
+    return resultData;
+  }, [data, filterDays, filterDataByDays]);
   
   const renderFilterUI = () => (
     <div className="mb-4 flex flex-wrap items-center space-x-2">
@@ -349,15 +519,15 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
         {useCustomDateRange ? (
           <>
             Showing data in custom date range
-            ({filteredData().length} of {data.length} campaigns)
+            ({groupedCampaignData.length} of {data.length} campaigns)
           </>
         ) : filterDays > 0 ? (
           <>
             Showing data since {new Date(Date.now() - filterDays * 86400000).toLocaleDateString()}
-            ({filteredData().length} of {data.length} campaigns)
+            ({groupedCampaignData.length} campaigns)
           </>
         ) : (
-          <>Showing all {data.length} campaigns</>
+          <>Showing all {groupedCampaignData.length} campaigns</>
         )}
       </div>
       
@@ -503,17 +673,47 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
   // Download CSV data
   const downloadCSV = useCallback(() => {
     if (!data.length) return;
+  
+    // Use the currently selected currency instead of prompting
+    const currency = displayCurrency;
     
-    const csv = Papa.unparse(data);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `ecommerce_analysis_${new Date().toISOString().slice(0,10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }, [data]);
+    // Fetch the latest data file first
+    fetch('/api/latest-data')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(result => {
+        const filename = result.file;
+        
+        // Attempt to use fetch for download to get more error details
+        return fetch(`/api/download-csv?filename=${encodeURIComponent(filename)}&currency=${currency}`)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Download error! status: ${response.status}, statusText: ${response.statusText}`);
+            }
+            return response.blob();
+          })
+          .then(blob => {
+            // Create a link and trigger download
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ecommerce_analysis_${currency}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+          });
+      })
+      .catch(error => {
+        console.error('Detailed download error:', error);
+        alert(`Failed to download CSV: ${error.message}. Please check your network connection or contact support.`);
+      });
+  }, [data, displayCurrency]);
+  
 
   // Generate AI Insights - using the API service
   const generateAIInsight = useCallback(async (campaign) => {
@@ -572,7 +772,7 @@ const filterDataByDays = useCallback((dataArray, daysBack) => {
 const summaryMetrics = useCallback(() => {
   if (!data.length) return {};
   
-  const filtered = filteredData();
+  const filtered = groupedCampaignData;
   
   // Extract refund metrics from the ORIGINAL data (first row)
   // This ensures global metrics are always available
@@ -599,39 +799,39 @@ const summaryMetrics = useCallback(() => {
     // Use the refund metrics from the original first row
     ...refundMetrics
   };
-}, [data, filteredData]);
+}, [data, groupedCampaignData]);
 
   // Get top performing campaigns
   const topCampaigns = useCallback(() => {
     if (!data.length) return [];
     
-    const filtered = filteredData();
+    const filtered = groupedCampaignData;
     
     return _.chain(filtered)
       .filter(c => c['Total Revenue'] > 0)
       .sortBy(c => -c['Total Net Profit'])
       .take(5)
       .value();
-  }, [data, filteredData]);
+  }, [data, groupedCampaignData]);
 
   // Get worst performing campaigns
   const worstCampaigns = useCallback(() => {
     if (!data.length) return [];
     
-    const filtered = filteredData();
+    const filtered = groupedCampaignData;
     
     return _.chain(filtered)
       .filter(c => c['Ad Spend'] > 0)
       .sortBy(c => c['Total Net Profit'])
       .take(5)
       .value();
-  }, [data, filteredData]);
+  }, [data, groupedCampaignData]);
 
   // Prepare data for charts
   const prepareROASChart = useCallback(() => {
     if (!data.length) return [];
     
-    const filtered = filteredData();
+    const filtered = groupedCampaignData;
     
     return _.chain(filtered)
       .groupBy(item => {
@@ -646,12 +846,12 @@ const summaryMetrics = useCallback(() => {
         value: value.length
       }))
       .value();
-  }, [data, filteredData]);
+  }, [data, groupedCampaignData]);
 
   const prepareProfitDistribution = useCallback(() => {
     if (!data.length) return [];
     
-    const filtered = filteredData();
+    const filtered = groupedCampaignData;
     const profitable = filtered.filter(c => c['Total Net Profit'] > 0);
     const unprofitable = filtered.filter(c => c['Total Net Profit'] <= 0);
     
@@ -659,14 +859,40 @@ const summaryMetrics = useCallback(() => {
       { name: 'Profitable', value: profitable.length },
       { name: 'Unprofitable', value: unprofitable.length }
     ];
-  }, [data, filteredData]);
+  }, [data, groupedCampaignData]);
 
   const prepareRevenueByProduct = useCallback(() => {
     if (!data.length) return [];
     
-    const filtered = filteredData();
+    // Get the Shopify product revenue details if available
+    const shopifyProductRevenue = {};
+    if (data[0]?.['Product Revenue Details']) {
+      try {
+        // Parse if it's a JSON string
+        if (typeof data[0]['Product Revenue Details'] === 'string') {
+          const parsed = JSON.parse(data[0]['Product Revenue Details']);
+          Object.assign(shopifyProductRevenue, parsed);
+        } 
+        // Use directly if it's already an object
+        else if (typeof data[0]['Product Revenue Details'] === 'object') {
+          Object.assign(shopifyProductRevenue, data[0]['Product Revenue Details']);
+        }
+      } catch (e) {
+        console.error('Error parsing product revenue details:', e);
+      }
+    }
     
-    return _.chain(filtered)
+    const filtered = filterDataByDays(data, filterDays);
+    
+    // Filter out collection campaign entries to avoid double-counting in products view
+    // Only use the distributed product entries for product metrics
+    const productsOnlyData = filtered.filter(item => 
+      !item.isCollectionCampaign || // Keep single product campaigns
+      item.isDistributedProduct     // Keep distributed product entries
+    );
+    
+    // Create campaign-attributed product data
+    const campaignProducts = _.chain(productsOnlyData)
       .groupBy('Product Name')
       .map((campaigns, product) => ({
         name: product || 'Unknown',
@@ -674,18 +900,50 @@ const summaryMetrics = useCallback(() => {
         profit: _.sumBy(campaigns, 'Total Net Profit'),
         orders: _.sumBy(campaigns, 'Total Orders'),
         campaigns: campaigns.length,
-        margin: (_.sumBy(campaigns, 'Total Net Profit') / _.sumBy(campaigns, 'Total Revenue') * 100) || 0
+        margin: (_.sumBy(campaigns, 'Total Net Profit') / _.sumBy(campaigns, 'Total Revenue') * 100) || 0,
+        // Add a flag to indicate this product has campaign data
+        hasCampaignData: true
       }))
       .filter(item => item.revenue > 0)
-      .orderBy(['revenue'], ['desc'])
-      .take(10)
       .value();
-  }, [data, filteredData]);
-
+    
+    // Create a map of product names to their data for easy lookup
+    const productMap = {};
+    campaignProducts.forEach(product => {
+      productMap[product.name] = product;
+    });
+    
+    // Add Shopify revenue for products not in campaigns
+    for (const [productName, revenue] of Object.entries(shopifyProductRevenue)) {
+      if (!productMap[productName]) {
+        // This product has Shopify revenue but no campaign data
+        campaignProducts.push({
+          name: productName,
+          revenue: revenue,
+          totalRevenue: revenue, // Same as revenue since no campaign data
+          profit: 0, // We don't know profit without campaign data
+          orders: 0, // We don't know order count
+          campaigns: 0,
+          margin: 0,
+          hasCampaignData: false
+        });
+      } else {
+        // Update existing product with total revenue
+        productMap[productName].totalRevenue = revenue;
+        // Calculate attribution percentage
+        productMap[productName].attributionPercentage = 
+          (productMap[productName].revenue / revenue * 100) || 0;
+      }
+    }
+    
+    // Sort by the specified field and direction
+    return _.orderBy(campaignProducts, [productSortField], [productSortDirection]);
+  }, [data, filterDays, filterDataByDays, productSortField, productSortDirection]);
+  
   const prepareCampaignPerformance = useCallback(() => {
     if (!data.length) return [];
     
-    const filtered = filteredData();
+    const filtered = groupedCampaignData;
     
     // Sort campaigns by Net Profit
     const sortedByProfit = _.sortBy(filtered, item => -(item['Total Net Profit'] || 0));
@@ -707,7 +965,7 @@ const summaryMetrics = useCallback(() => {
       roas: campaign['Total ROAS'] || 0,
       isTopCampaign: topCampaigns.includes(campaign) // Add flag to distinguish top campaigns
     }));
-  }, [data, filteredData]);
+  }, [data, groupedCampaignData]);
   
 
   // Show campaign details modal
@@ -721,6 +979,10 @@ const summaryMetrics = useCallback(() => {
   // Modal Component
   const CampaignModal = () => {
     if (!isModalOpen || !modalContent) return null;
+    
+    // Check if this is a collection campaign with multiple products
+    const isCollection = modalContent.isCollectionCampaign && Array.isArray(modalContent['Product Name']);
+    const products = isCollection ? modalContent['Product Name'] : [modalContent['Product Name']];
     
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -736,28 +998,42 @@ const summaryMetrics = useCallback(() => {
               </button>
             </div>
             
-            
             <div className="mb-6">
               <h3 className="text-xl mb-2">{modalContent.campaignName}</h3>
-              <p className="text-gray-600 dark:text-gray-300">Product: {modalContent['Product Name'] || 'N/A'}</p>
-              <p className="text-gray-600 dark:text-gray-300">
+              
+              {/* Display product info differently for collection campaigns */}
+              {isCollection ? (
+                <div>
+                  <p className="text-gray-600 dark:text-gray-300">Collection Campaign with {products.length} products:</p>
+                  <ul className="mt-2 pl-5 list-disc">
+                    {products.map((product, idx) => (
+                      <li key={idx} className="text-gray-600 dark:text-gray-300">{product}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-gray-600 dark:text-gray-300">Product: {modalContent['Product Name'] || 'N/A'}</p>
+              )}
+              
+              <p className="text-gray-600 dark:text-gray-300 mt-2">
                 Campaign Period: {new Date(modalContent['Campaign Start']).toLocaleDateString()} - {new Date(modalContent['Campaign End']).toLocaleDateString()}
               </p>
             </div>
             
+            {/* Rest of modal remains unchanged */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div className="bg-gray-100 dark:bg-gray-700 p-4 rounded-lg">
                 <h4 className="font-bold mb-2">Financial Summary</h4>
                 <div className="grid grid-cols-2 gap-2">
-                  <div>Ad Spend:</div>
-                  <div className="text-right">€{modalContent['Ad Spend']?.toFixed(2) || '0.00'}</div>
-                  
+                <div>Ad Spend:</div>
+                  <div className="text-right">{displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(modalContent['Ad Spend'])?.toFixed(2) || '0.00'}</div>
+
                   <div>Total Revenue:</div>
-                  <div className="text-right">€{modalContent['Total Revenue']?.toFixed(2) || '0.00'}</div>
+                  <div className="text-right">{displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(modalContent['Total Revenue'])?.toFixed(2) || '0.00'}</div>
                   
                   <div>Net Profit:</div>
                   <div className="text-right" style={{ color: (modalContent['Total Net Profit'] || 0) > 0 ? theme.positive : theme.negative }}>
-                    €{modalContent['Total Net Profit']?.toFixed(2) || '0.00'}
+                    {displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(modalContent['Total Net Profit'])?.toFixed(2) || '0.00'}
                   </div>
                   
                   <div>ROAS:</div>
@@ -792,7 +1068,7 @@ const summaryMetrics = useCallback(() => {
                   
                   <div>CPA:</div>
                   <div className="text-right">
-                    {modalContent['CPA'] ? `€${modalContent['CPA'].toFixed(2)}` : 'N/A'}
+                    {modalContent['CPA'] ? `${displayCurrency === 'EUR' ? '€' : '$'}${convertCurrency(modalContent['CPA']).toFixed(2)}` : 'N/A'}
                   </div>
                 </div>
               </div>
@@ -830,7 +1106,7 @@ const summaryMetrics = useCallback(() => {
           </div>
         </div>
       </div>
-    );
+    )
   };
 
   // Dashboard tabs
@@ -851,14 +1127,22 @@ const summaryMetrics = useCallback(() => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           { 
-            title: 'Total Revenue', 
-            value: `€${metrics.totalRevenue?.toFixed(2) || '0.00'}`,
+            title: 'Shopify Revenue', 
+            value: `${displayCurrency === 'EUR' ? '€' : '$'}${convertCurrency(data[0]?.['Total Shopify Revenue'])?.toFixed(2) || '0.00'}`,
+            subtitle: 'Total store revenue',
             icon: <DollarSign size={20} />,
             color: theme.primary
           },
           { 
+            title: 'Campaign Revenue', 
+            value: `${displayCurrency === 'EUR' ? '€' : '$'}${convertCurrency(metrics.totalRevenue)?.toFixed(2) || '0.00'}`,
+            subtitle: 'Attributed to campaigns',
+            icon: <TrendingUp size={20} />,
+            color: theme.accent
+          },
+          { 
             title: 'Net Profit', 
-            value: `€${metrics.totalProfit?.toFixed(2) || '0.00'}`,
+            value: `${displayCurrency === 'EUR' ? '€' : '$'}${convertCurrency(metrics.totalProfit)?.toFixed(2) || '0.00'}`,
             icon: <TrendingUp size={20} />,
             color: metrics.totalProfit >= 0 ? theme.positive : theme.negative
           },
@@ -875,33 +1159,35 @@ const summaryMetrics = useCallback(() => {
             color: theme.accent
           }
         ].map((card, index) => (
-            <div 
-              key={card.title}
-              className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 transform transition duration-300 hover:scale-105"
-              style={{ 
-                backgroundColor: theme.cardBackground, 
-                borderColor: theme.border,
-                animationDelay: getAnimationDelay(index),
-                animationName: 'fadeInUp',
-                animationDuration: '0.5s',
-                animationFillMode: 'both',
-              }}
-            >
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">{card.title}</p>
-                  <h3 className="text-2xl font-bold mt-1" style={{ color: card.color }}>{card.value}</h3>
-                </div>
-                <div 
-                  className="p-2 rounded-full"
-                  style={{ backgroundColor: `${card.color}20` }}
-                >
-                  <div style={{ color: card.color }}>{card.icon}</div>
-                </div>
+          <div 
+            key={card.title}
+            className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 transform transition duration-300 hover:scale-105"
+            style={{ 
+              backgroundColor: theme.cardBackground, 
+              borderColor: theme.border,
+              animationDelay: getAnimationDelay(index),
+              animationName: 'fadeInUp',
+              animationDuration: '0.5s',
+              animationFillMode: 'both',
+            }}
+          >
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">{card.title}</p>
+                <h3 className="text-2xl font-bold mt-1" style={{ color: card.color }}>{card.value}</h3>
+                {card.subtitle && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{card.subtitle}</p>
+                )}
+              </div>
+              <div 
+                className="p-2 rounded-full"
+                style={{ backgroundColor: `${card.color}20` }}
+              >
+                <div style={{ color: card.color }}>{card.icon}</div>
               </div>
             </div>
-          ))}
-
+          </div>
+        ))}
 </div>
 {/* Refund Metrics Cards */}
 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
@@ -956,7 +1242,7 @@ const summaryMetrics = useCallback(() => {
         <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Total Refunds</p>
         <h3 className="text-2xl font-bold mt-1">{metrics.totalRefunds || 0}</h3>
         <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
-          Value: €{(metrics.totalRefundValue || 0).toFixed(2)}
+          Value: {displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(metrics.totalRefundValue || 0).toFixed(2)}
         </p>
       </div>
       <div 
@@ -1246,19 +1532,20 @@ const summaryMetrics = useCallback(() => {
           </div>
           {renderFilterUI()}
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
-                  <th className="py-2 px-4 text-left">Campaign</th>
-                  <th className="py-2 px-4 text-right">Spend</th>
-                  <th className="py-2 px-4 text-right">Revenue</th>
-                  <th className="py-2 px-4 text-right">ROAS</th>
-                  <th className="py-2 px-4 text-right">Profit</th>
-                  <th className="py-2 px-4 text-right">Margin %</th>
-                </tr>
-              </thead>
-              <tbody>
-              {filteredData().map((campaign, index) => (
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
+                <th className="py-2 px-4 text-left">Campaign</th>
+                <th className="py-2 px-4 text-right">Spend</th>
+                <th className="py-2 px-4 text-right">Revenue</th>
+                <th className="py-2 px-4 text-right">ROAS</th>
+                <th className="py-2 px-4 text-right">Profit</th>
+                <th className="py-2 px-4 text-right">Margin %</th>
+                <th className="py-2 px-4 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+            {groupedCampaignData.map((campaign, index) => (
               <tr 
                 key={index}
                 className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -1278,19 +1565,24 @@ const summaryMetrics = useCallback(() => {
                     ) : (
                       campaign.campaignName
                     )}
+                    {campaign.isCollectionCampaign && (
+                      <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full dark:bg-blue-900 dark:text-blue-200">
+                        Collection
+                      </span>
+                    )}
                   </div>
                 </td>
-                <td className="py-2 px-4 text-right">€{campaign['Ad Spend']?.toFixed(2)}</td>
-                <td className="py-2 px-4 text-right">€{campaign['Total Revenue']?.toFixed(2)}</td>
+                <td className="py-2 px-4 text-right">{displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(campaign['Ad Spend'])?.toFixed(2)}</td>
+                <td className="py-2 px-4 text-right">{displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(campaign['Total Revenue'])?.toFixed(2)}</td>
                 <td className="py-2 px-4 text-right" style={{ 
-                  color: (campaign['Total ROAS'] || 0) >= 1 ? theme.positive : theme.negative 
+                  color: (campaign['Total Net Profit'] || 0) >= 0 ? theme.positive : theme.negative 
                 }}>
                   {campaign['Total ROAS']?.toFixed(2) || '0.00'}
                 </td>
                 <td className="py-2 px-4 text-right" style={{ 
                   color: (campaign['Total Net Profit'] || 0) >= 0 ? theme.positive : theme.negative 
                 }}>
-                  €{campaign['Total Net Profit']?.toFixed(2)}
+                {displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(campaign['Total Net Profit'])?.toFixed(2)}
                 </td>
                 <td className="py-2 px-4 text-right" style={{ 
                   color: (campaign['Total Profit Margin (%)'] || 0) >= 0 ? theme.positive : theme.negative 
@@ -1307,8 +1599,8 @@ const summaryMetrics = useCallback(() => {
                 </td>
               </tr>
             ))}
-              </tbody>
-            </table>
+            </tbody>
+          </table>
           </div>
         </div>
       </div>
@@ -1453,76 +1745,95 @@ const summaryMetrics = useCallback(() => {
           <h3 className="text-lg font-semibold mb-4">Products by Performance</h3>
           
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
-                  <th 
-                    className="py-2 px-4 text-left cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={() => handleSortClick('name')}
-                  >
-                    Product {renderSortIndicator('name')}
-                  </th>
-                  <th 
-                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={() => handleSortClick('revenue')}
-                  >
-                    Revenue {renderSortIndicator('revenue')}
-                  </th>
-                  <th 
-                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={() => handleSortClick('orders')}
-                  >
-                    Sales Volume {renderSortIndicator('orders')}
-                  </th>
-                  <th 
-                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={() => handleSortClick('profit')}
-                  >
-                    Profit {renderSortIndicator('profit')}
-                  </th>
-                  <th 
-                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={() => handleSortClick('campaigns')}
-                  >
-                    Campaigns {renderSortIndicator('campaigns')}
-                  </th>
-                  <th 
-                    className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={() => handleSortClick('margin')}
-                  >
-                    Margin % {renderSortIndicator('margin')}
-                  </th>
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-700" style={{ borderColor: theme.border }}>
+                <th 
+                  className="py-2 px-4 text-left cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  onClick={() => handleSortClick('name')}
+                >
+                  Product {renderSortIndicator('name')}
+                </th>
+                <th 
+                  className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  onClick={() => handleSortClick('totalRevenue')}
+                >
+                  Total Revenue {renderSortIndicator('totalRevenue')}
+                </th>
+                <th 
+                  className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  onClick={() => handleSortClick('revenue')}
+                >
+                  Campaign Revenue {renderSortIndicator('revenue')}
+                </th>
+                <th 
+                  className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  onClick={() => handleSortClick('orders')}
+                >
+                  Orders {renderSortIndicator('orders')}
+                </th>
+                <th 
+                  className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  onClick={() => handleSortClick('profit')}
+                >
+                  Profit {renderSortIndicator('profit')}
+                </th>
+                <th 
+                  className="py-2 px-4 text-right cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  onClick={() => handleSortClick('margin')}
+                >
+                  Margin % {renderSortIndicator('margin')}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedProductData.map((product, index) => (
+                <tr 
+                  key={index}
+                  className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
+                  style={{ borderColor: theme.border }}
+                >
+                  <td className="py-2 px-4">
+                    <div className="truncate max-w-xs">
+                      {product.name}
+                      {!product.hasCampaignData && (
+                        <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">(no campaign data)</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2 px-4 text-right">
+                  {displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(product.totalRevenue || product.revenue).toFixed(2)}
+                </td>
+                <td className="py-2 px-4 text-right">
+                  {product.hasCampaignData ? (
+                    <>
+                      {displayCurrency === 'EUR' ? '€' : '$'}{convertCurrency(product.revenue).toFixed(2)}
+                      {product.attributionPercentage && (
+                        <span className="ml-1 text-xs text-gray-500">
+                          ({product.attributionPercentage.toFixed(0)}%)
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                  <td className="py-2 px-4 text-right">{product.orders || '—'}</td>
+                  <td className="py-2 px-4 text-right" style={{ 
+                    color: product.profit > 0 ? theme.positive : product.profit < 0 ? theme.negative : 'inherit'
+                  }}>
+                    {product.hasCampaignData ? `€${product.profit.toFixed(2)}` : '—'}
+                  </td>
+                  <td className="py-2 px-4 text-right" style={{ 
+                    color: product.margin > 0 ? theme.positive : product.margin < 0 ? theme.negative : 'inherit'
+                  }}>
+                    {product.hasCampaignData ? `${product.margin.toFixed(2)}%` : '—'}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {sortedProductData.map((product, index) => (
-                  <tr 
-                    key={index}
-                    className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
-                    style={{ borderColor: theme.border }}
-                  >
-                    <td className="py-2 px-4">
-                      <div className="truncate max-w-xs">
-                        {product.name}
-                      </div>
-                    </td>
-                    <td className="py-2 px-4 text-right">€{product.revenue.toFixed(2)}</td>
-                    <td className="py-2 px-4 text-right">{product.orders}</td>
-                    <td className="py-2 px-4 text-right" style={{ 
-                      color: product.profit >= 0 ? theme.positive : theme.negative 
-                    }}>
-                      €{product.profit.toFixed(2)}
-                    </td>
-                    <td className="py-2 px-4 text-right">{product.campaigns}</td>
-                    <td className="py-2 px-4 text-right" style={{ 
-                      color: product.margin >= 0 ? theme.positive : theme.negative 
-                    }}>
-                      {product.margin.toFixed(2)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </tbody>
+          </table>
+
           </div>
         </div>
       </div>
@@ -1727,14 +2038,14 @@ const summaryMetrics = useCallback(() => {
           
           <div className="mt-6 flex justify-end">
             <div className="flex space-x-2">
-              <button
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded flex items-center space-x-2"
-                onClick={downloadCSV}
-                style={{ backgroundColor: `${theme.neutral}20`, color: theme.foreground }}
-              >
-                <Download size={18} />
-                <span>Export CSV</span>
-              </button>
+            <button
+            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded flex items-center space-x-2"
+            onClick={downloadCSV}
+            style={{ backgroundColor: `${theme.neutral}20`, color: theme.foreground }}
+          >
+            <Download size={18} />
+            <span>Export CSV ({displayCurrency})</span>
+          </button>
               
               <button
                 className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded flex items-center space-x-2"
@@ -1981,6 +2292,13 @@ return (
             title="Download CSV"
           >
             <Download size={20} />
+          </button>
+          <button
+            className="p-2 rounded-lg bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
+            onClick={() => setDisplayCurrency(displayCurrency === 'EUR' ? 'USD' : 'EUR')}
+            title={`Switch to ${displayCurrency === 'EUR' ? 'USD' : 'EUR'}`}
+          >
+            {displayCurrency === 'EUR' ? '$' : '€'}
           </button>
         </div>
       </div>
