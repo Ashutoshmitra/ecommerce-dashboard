@@ -128,6 +128,59 @@ const EcommerceDashboard = ({
     }
   }, []);
 
+  const updateFacebookCredentials = async (adAccountId, accessToken) => {
+    try {
+      console.log('Updating Facebook credentials for account ID:', adAccountId);
+      
+      // Update the script logs to show we're attempting to update credentials
+      setScriptLogs(prev => 
+        prev + `\n[${new Date().toLocaleTimeString()}] Attempting to update Facebook credentials...\n`
+      );
+      
+      const response = await fetch(`${apiService.baseUrl}/api/update-facebook-credentials`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          adAccountId,
+          accessToken
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        console.error('Error updating credentials:', result);
+        setScriptLogs(prev => 
+          prev + `\n[${new Date().toLocaleTimeString()}] Failed to update credentials: ${JSON.stringify(result)}\n`
+        );
+        alert(`Failed to update credentials: ${result.error || response.statusText}`);
+        return;
+      }
+      
+      console.log('Credentials update result:', result);
+      
+      // Update script logs with success information
+      setScriptLogs(prev => 
+        prev + `\n[${new Date().toLocaleTimeString()}] Facebook credentials updated successfully.\n` +
+        `- Environment file path: ${result.env_file_path}\n` +
+        `- Account ID updated: ${adAccountId}\n` +
+        `- Access Token updated: ***${accessToken.slice(-5)}\n`
+      );
+      
+      alert(`Facebook credentials updated successfully. The next data refresh will use the new credentials.`);
+    } catch (error) {
+      console.error('Error updating Facebook credentials:', error);
+      setScriptLogs(prev => 
+        prev + `\n[${new Date().toLocaleTimeString()}] Error updating credentials: ${error.message}\n`
+      );
+      alert(`Error updating credentials: ${error.message}. Check console for details.`);
+    }
+  };
+
+
+
   // Load data function
   const loadData = useCallback(async () => {
     // First fetch the exchange rate
@@ -2065,6 +2118,52 @@ const summaryMetrics = useCallback(() => {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      {/* Facebook API Settings */}
+        <div className="mt-6">
+          <h3 className="text-lg font-semibold mb-4">Facebook API Settings</h3>
+          <div className="p-4 bg-gray-100 dark:bg-gray-700 rounded">
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const adAccountId = e.target.adAccountId.value.trim();
+              const accessToken = e.target.accessToken.value.trim();
+              
+              if (!adAccountId || !accessToken) {
+                alert('Both Ad Account ID and Access Token are required');
+                return;
+              }
+              
+              // Call function to update Facebook API credentials
+              updateFacebookCredentials(adAccountId, accessToken);
+            }}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Ad Account ID</label>
+                <input
+                  type="text"
+                  name="adAccountId"
+                  className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded"
+                  placeholder="e.g. 599673092559823"
+                  style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Access Token</label>
+                <input
+                  type="text"
+                  name="accessToken"
+                  className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded"
+                  placeholder="Enter your Facebook access token"
+                  style={{ backgroundColor: theme.cardBackground, color: theme.foreground, borderColor: theme.border }}
+                />
+              </div>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded"
+              >
+                Update Facebook Credentials
+              </button>
+            </form>
           </div>
         </div>
       </div>

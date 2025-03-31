@@ -8,6 +8,16 @@ import sys
 import threading
 from dotenv import load_dotenv
 load_dotenv()
+# Get the backend directory path (current directory of this script)
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE = os.path.join(BACKEND_DIR, '.env')
+
+# Load .env file from backend directory
+if os.path.exists(ENV_FILE):
+    print(f"Loading .env file from: {ENV_FILE}")
+    load_dotenv(ENV_FILE)
+else:
+    print(f"Warning: .env file not found at: {ENV_FILE}")
 # Get the absolute path to the project root directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

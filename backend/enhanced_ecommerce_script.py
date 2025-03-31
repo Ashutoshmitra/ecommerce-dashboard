@@ -22,8 +22,9 @@ SHOPIFY_PASSWORD = "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"
 SHOPIFY_SHOP_NAME = "dd3662-08"
 
 # Facebook API Credentials
-FB_AD_ACCOUNT_ID = "599673092559823"
-FB_ACCESS_TOKEN = "EAATWoaVO7YkBO00ZBDeV8NMjxNlt0mWkyQasFghoJujc9bzEWda2e8rbLVZA7umkhmyeR3MZA5Rgxls1wVadHHcf5lBpkfN4U7ZBrLNSDDmSq2BhXkfEaILr8bTxMraYxHcWKcter1k7HLzVUZCisvHjmTAcY3F5o8bEtePfDJVg3iDGm8OS0qjzwLqvxWmaOAVZBDvjRQ"
+# Facebook API Credentials
+FB_AD_ACCOUNT_ID = os.environ.get('FB_AD_ACCOUNT_ID', "599673092559823")
+FB_ACCESS_TOKEN = os.environ.get('FB_ACCESS_TOKEN', "EAATWoaVO7YkBO00ZBDeV8NMjxNlt0mWkyQasFghoJujc9bzEWda2e8rbLVZA7umkhmyeR3MZA5Rgxls1wVadHHcf5lBpkfN4U7ZBrLNSDDmSq2BhXkfEaILr8bTxMraYxHcWKcter1k7HLzVUZCisvHjmTAcY3F5o8bEtePfDJVg3iDGm8OS0qjzwLqvxWmaOAVZBDvjRQ")
 
 # Analysis Parameters
 ATTRIBUTION_WINDOW_DAYS = 7  # Standard attribution window
@@ -32,7 +33,7 @@ EXTENDED_ANALYSIS_DAYS = 30  # Days to look beyond attribution window
 
 # Shopify Base URL
 SHOPIFY_URL = f"https://{SHOPIFY_API_KEY}:{SHOPIFY_PASSWORD}@{SHOPIFY_SHOP_NAME}.myshopify.com/admin/api/2023-10"
-USD_TO_EUR_RATE = get_exchange_rate("USD", "EUR")
+
 
 #############################################
 # SHOPIFY API FUNCTIONS
@@ -68,6 +69,7 @@ def get_exchange_rate(from_currency="USD", to_currency="EUR"):
     except Exception as e:
         print(f"Error fetching exchange rate: {str(e)}. Using fallback rate: 0.96")
         return 0.96
+USD_TO_EUR_RATE = get_exchange_rate("USD", "EUR")
 
 def update_shopify_url(api_key=None, password=None, shop_name=None):
     """Update the Shopify URL based on potentially updated credentials"""

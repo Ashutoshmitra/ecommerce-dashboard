@@ -11,6 +11,25 @@ import logging
 import anthropic  # Import the Anthropic SDK
 from dotenv import load_dotenv
 load_dotenv()
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+env_path = os.path.join(parent_dir, '.env')
+
+# Try to load .env file
+if os.path.exists(env_path):
+    print(f"Loading .env file from: {env_path}")
+    load_dotenv(env_path)
+else:
+    print(f"Warning: .env file not found at: {env_path}")
+    # Try one directory up
+    env_path = os.path.join(current_dir, '.env')
+    if os.path.exists(env_path):
+        print(f"Loading .env file from: {env_path}")
+        load_dotenv(env_path)
+    else:
+        print("Warning: No .env file found. Using default environment variables.")
+
 # Get the absolute path to the project root directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -114,6 +133,89 @@ def list_files():
         return jsonify({"files": files})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/update-facebook-credentials', methods=['POST'])
+def update_facebook_credentials():
+    try:
+        data = request.json
+        ad_account_id = data.get('adAccountId')
+        access_token = data.get('accessToken')
+        
+        app.logger.info(f"Received update request for Facebook credentials - Account ID: {ad_account_id}")
+        
+        if not ad_account_id or not access_token:
+            return jsonify({"error": "Both Ad Account ID and Access Token are required"}), 400
+        
+        # Get the path to the backend directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))  # This should be the backend directory
+        env_file = os.path.join(current_dir, '.env')
+        
+        app.logger.info(f"Attempting to update .env file at: {env_file}")
+        
+        # Check if file exists in backend directory
+        if not os.path.exists(env_file):
+            app.logger.warning(f".env file not found in backend directory: {env_file}")
+            # We'll create it if it doesn't exist
+        
+        # Read existing .env content if file exists
+        env_lines = []
+        fb_account_id_found = False
+        fb_token_found = False
+        
+        if os.path.exists(env_file):
+            try:
+                with open(env_file, 'r') as f:
+                    env_lines = f.readlines()
+                
+                # Process each line
+                for i, line in enumerate(env_lines):
+                    stripped_line = line.strip()
+                    if stripped_line.startswith('FB_AD_ACCOUNT_ID='):
+                        env_lines[i] = f'FB_AD_ACCOUNT_ID="{ad_account_id}"\n'
+                        fb_account_id_found = True
+                    elif stripped_line.startswith('FB_ACCESS_TOKEN='):
+                        env_lines[i] = f'FB_ACCESS_TOKEN="{access_token}"\n'
+                        fb_token_found = True
+            except Exception as e:
+                app.logger.error(f"Error reading existing .env file: {str(e)}")
+                # Continue with empty env_lines
+                env_lines = []
+        
+        # Append new variables if not found
+        if not fb_account_id_found:
+            env_lines.append(f'FB_AD_ACCOUNT_ID="{ad_account_id}"\n')
+        if not fb_token_found:
+            env_lines.append(f'FB_ACCESS_TOKEN="{access_token}"\n')
+        
+        # Write the updated content back to the file
+        try:
+            with open(env_file, 'w') as f:
+                f.writelines(env_lines)
+            
+            app.logger.info(f"Successfully updated .env file at {env_file}")
+            
+            # Set environment variables for the current process
+            os.environ['FB_AD_ACCOUNT_ID'] = ad_account_id
+            os.environ['FB_ACCESS_TOKEN'] = access_token
+            app.logger.info("Set environment variables for current process")
+            
+            return jsonify({
+                "status": "success", 
+                "message": "Facebook credentials updated successfully",
+                "env_file_path": env_file
+            })
+            
+        except Exception as e:
+            app.logger.error(f"Error writing to .env file: {str(e)}")
+            return jsonify({
+                "status": "error", 
+                "message": f"Error updating .env file: {str(e)}",
+                "attempted_path": env_file
+            }), 500
+    
+    except Exception as e:
+        app.logger.error(f"Unexpected error in update_facebook_credentials: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 # Endpoint to run the analysis script
 @app.route('/api/run-script', methods=['POST'])

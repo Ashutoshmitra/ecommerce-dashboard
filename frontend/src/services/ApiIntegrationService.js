@@ -225,26 +225,29 @@ async processChat(context) {
     
     const { dashboardData, question } = context;
     
-    // Compress the data without reducing the number of campaigns
+    // Compress the data and limit to first 200 campaigns
     let compressedData = { ...dashboardData };
     
     // If allCampaigns exists, compress each campaign to essential fields only
+    // and limit to first 200 campaigns
     if (compressedData.allCampaigns && compressedData.allCampaigns.length > 0) {
       console.log(`Compressing ${compressedData.allCampaigns.length} campaigns`);
       
-      compressedData.allCampaigns = compressedData.allCampaigns.map(campaign => ({
-        name: campaign.name || 'Unknown',
-        product: campaign.product || 'Unknown',
-        adSpend: campaign.adSpend || 0,
-        revenue: campaign.revenue || 0,
-        profit: campaign.profit || 0,
-        roas: campaign.roas || 0,
-        orders: campaign.orders || 0,
-        conversionRate: campaign.conversionRate || 0
-      }));
+      compressedData.allCampaigns = compressedData.allCampaigns
+        .slice(0, 200) // Limit to first 200 campaigns
+        .map(campaign => ({
+          name: campaign.name || 'Unknown',
+          product: campaign.product || 'Unknown',
+          adSpend: campaign.adSpend || 0,
+          revenue: campaign.revenue || 0,
+          profit: campaign.profit || 0,
+          roas: campaign.roas || 0,
+          orders: campaign.orders || 0,
+          conversionRate: campaign.conversionRate || 0
+        }));
     }
     
-    // Make the request to your backend proxy endpoint instead of directly to Anthropic
+    // Make the request to your backend proxy endpoint
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: {
